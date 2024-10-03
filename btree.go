@@ -122,3 +122,48 @@ func nodeLookupLE(node BNode, key []byte) uint16 {
 	return found
 }
 
+// copies a KV pair
+func nodeAppendKV(new BNode, idx uint16, ptr uint64, key []byte, val []byte) {
+	new.setPtr(idx, ptr)
+
+	pos := new.kvPos(idx)
+	binary.LittleEndian.PutUint16(new[pos+0:], uint16(len(key)))
+	binary.LittleEndian.PutUint16(new[pos+2:], uint16(len(val)))
+	copy(new[pos+4:], key)
+	copy(new[pos+4+uint16(len(key)):], val)
+
+	new.setOffset(idx+1, new.getOffset(idx)+4+uint16((len(key)+len(val))))
+}
+
+// copies multiple KV's into posiiton from old node
+func nodeAppendRange(new BNode, old BNode, dstNew uint16, srcOld uint16, n uint16) {
+	assert(srcOld+n <= old.nkeys())
+	assert(dstNew+n <= new.nkeys())
+	if n == 0 {
+		return
+	}
+
+	for i := uint16(0); i < n; i++ {
+		new.setPtr(dstNew+i, old.getPtr(srcOld+1))
+	}
+
+	dstBegin := new.getOffset(dstNew)
+	srcBegin := old.getOffset(srcOld)
+	for i := uint16(1); i <= n; i++ { 
+		offset := dstBegin + old.getOffset(srcOld+i) - srcBegin
+		new.setOffset(dstNew+i, offset)
+	}
+
+	// kv's
+	begin := old.kvPos(srcOld)
+	end := old.kvPos(srcOld + n)
+	copy(new[new.kvPos(dstNew):], old[begin:end])
+}
+
+// addin a new key to leaf node
+func leafInsert(new BNode, old BNode, idx uint16, key []byte, val []byte) {
+	new.setHeader(BNODE_LEAF, old.nkeys()+1)
+	nodeAppendRange(new, old, 0, 0, idx)
+	nodeAppendKV(new, idx, 0, key, val)
+	nodeAppendRange(new, old, idx+1, idx, old.nkeys()-idx)
+}
