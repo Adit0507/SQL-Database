@@ -168,6 +168,13 @@ func leafInsert(new BNode, old BNode, idx uint16, key []byte, val []byte) {
 	nodeAppendRange(new, old, idx+1, idx, old.nkeys()-idx)
 }
 
+func leafUpdate(new BNode, old BNode, idx uint16, key []byte, val []byte) {
+	new.setHeader(BNODE_LEAF, old.nkeys())
+	nodeAppendRange(new, old, 0, 0, idx)
+	nodeAppendKV(new, idx, 0, key, val)
+	nodeAppendRange(new, old, idx+1, idx+1, old.nkeys()-(idx+1))
+}
+
 func nodeReplaceKid1ptr(new BNode, old BNode, idx uint16, ptr uint64) {
 	copy(new, old[:old.nbytes()])
 	new.setPtr(idx, ptr) // only the pointer is changed
@@ -221,7 +228,7 @@ func nodeSplit2(left BNode, right BNode, old BNode) {
 	assert(right.nbytes() <= BTREE_PAGE_SIZE)
 }
 
-// split into 3
+// splits an oversized node
 func nodeSplit3(old BNode) (uint16, [3]BNode) {
 	if old.nbytes() <= BTREE_PAGE_SIZE {
 		old = old[:BTREE_PAGE_SIZE]
@@ -243,4 +250,37 @@ func nodeSplit3(old BNode) (uint16, [3]BNode) {
 	assert(mostLeft.nbytes() <= BTREE_PAGE_SIZE)
 
 	return 3, [3]BNode{mostLeft, middle, right}
+}
+
+// tree insertion- inserts a KV into a node
+func treeInsert(tree *BTree, node BNode, key []byte, val []byte) BNode {
+	new := BNode(make([]byte, 2*BTREE_PAGE_SIZE))
+
+	idx := nodeLookupLE(node, key)
+	switch node.btype() {
+	case BNODE_LEAF:
+		if bytes.Equal(key, node.getKey(idx)) {
+			// updating the key
+			leafUpdate(new, node, idx, key, val)
+		} else {
+			leafInsert(new, node, idx+1, key, val)
+		}
+
+	case BNODE_NODE:
+		nodeInsert(tree, new, node, idx, key, val)
+	default:
+		panic("bad node!")
+	}
+
+	return new
+}
+
+// KV insertion to an internal node
+func nodeInsert(tree *BTree, new BNode, node BNode, idx uint16, key []byte, val []byte) {
+	kptr := node.getPtr(idx)
+	knode := treeInsert(tree, tree.get(kptr), key, val)
+
+	nsplit, split := nodeSplit3(knode)
+	tree.del(kptr)
+	nodeReplaceKidN(tree, new, node, idx, split[:nsplit]...)
 }
