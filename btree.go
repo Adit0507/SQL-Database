@@ -149,7 +149,7 @@ func nodeAppendRange(new BNode, old BNode, dstNew uint16, srcOld uint16, n uint1
 
 	dstBegin := new.getOffset(dstNew)
 	srcBegin := old.getOffset(srcOld)
-	for i := uint16(1); i <= n; i++ { 
+	for i := uint16(1); i <= n; i++ {
 		offset := dstBegin + old.getOffset(srcOld+i) - srcBegin
 		new.setOffset(dstNew+i, offset)
 	}
@@ -166,4 +166,15 @@ func leafInsert(new BNode, old BNode, idx uint16, key []byte, val []byte) {
 	nodeAppendRange(new, old, 0, 0, idx)
 	nodeAppendKV(new, idx, 0, key, val)
 	nodeAppendRange(new, old, idx+1, idx, old.nkeys()-idx)
+}
+
+func nodeReplaceKidN(tree *BTree, new BNode, old BNode, idx uint16, kids ...BNode) {
+	inc := uint16(len(kids))
+	new.setHeader(BNODE_NODE, old.nkeys()+inc-1)
+	nodeAppendRange(new, old, 0, 0, idx)
+
+	for i, node := range kids {
+		nodeAppendKV(new, idx+uint16(i), tree.new(node), node.getKey(0), nil)
+	}
+	nodeAppendRange(new, old, idx+inc, idx+1, old.nkeys()-(idx+1))
 }
