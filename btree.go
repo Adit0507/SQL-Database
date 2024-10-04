@@ -188,3 +188,59 @@ func nodeReplaceKidN(tree *BTree, new BNode, old BNode, idx uint16, kids ...BNod
 	}
 	nodeAppendRange(new, old, idx+inc, idx+1, old.nkeys()-(idx+1))
 }
+
+// split a big node into 2
+func nodeSplit2(left BNode, right BNode, old BNode) {
+	assert(old.nkeys() >= 2)
+
+	nleft := old.nkeys() / 2
+
+	left_bytes := func() uint16 {
+		return HEADER + 8*nleft + 2*nleft + old.getOffset(nleft)
+	}
+
+	for left_bytes() > BTREE_PAGE_SIZE {
+		nleft--
+	}
+	assert(nleft >= 1)
+
+	right_bytes := func() uint16 {
+		return old.nbytes() - left_bytes() + HEADER
+	}
+	for right_bytes() > BTREE_PAGE_SIZE {
+		nleft++
+	}
+	assert(nleft < old.nkeys())
+	nright := old.nkeys() - nleft
+
+	left.setHeader(old.btype(), nleft)
+	right.setHeader(old.btype(), nright)
+	nodeAppendRange(left, old, 0, 0, nleft)
+	nodeAppendRange(right, old, 0, nleft, nright)
+
+	assert(right.nbytes() <= BTREE_PAGE_SIZE)
+}
+
+// split into 3
+func nodeSplit3(old BNode) (uint16, [3]BNode) {
+	if old.nbytes() <= BTREE_PAGE_SIZE {
+		old = old[:BTREE_PAGE_SIZE]
+		return 1, [3]BNode{old} //wont split
+	}
+
+	left := BNode(make([]byte, 2*BTREE_PAGE_SIZE))
+	right := BNode(make([]byte, BTREE_PAGE_SIZE))
+	nodeSplit2(left, right, old)
+
+	if left.nbytes() <= BTREE_PAGE_SIZE {
+		left = left[:BTREE_PAGE_SIZE]
+		return 2, [3]BNode{left, right}
+	}
+
+	mostLeft := BNode(make([]byte, BTREE_PAGE_SIZE))
+	middle := BNode(make([]byte, BTREE_PAGE_SIZE))
+	nodeSplit2(mostLeft, middle, left)
+	assert(mostLeft.nbytes() <= BTREE_PAGE_SIZE)
+
+	return 3, [3]BNode{mostLeft, middle, right}
+}
