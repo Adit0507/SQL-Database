@@ -168,8 +168,18 @@ func leafInsert(new BNode, old BNode, idx uint16, key []byte, val []byte) {
 	nodeAppendRange(new, old, idx+1, idx, old.nkeys()-idx)
 }
 
+func nodeReplaceKid1ptr(new BNode, old BNode, idx uint16, ptr uint64) {
+	copy(new, old[:old.nbytes()])
+	new.setPtr(idx, ptr) // only the pointer is changed
+}
+
 func nodeReplaceKidN(tree *BTree, new BNode, old BNode, idx uint16, kids ...BNode) {
 	inc := uint16(len(kids))
+	if inc == 1 && bytes.Equal(kids[0].getKey(0), old.getKey(idx)) {
+		nodeReplaceKid1ptr(new, old, idx, tree.new(kids[0]))
+		return
+	}
+
 	new.setHeader(BNODE_NODE, old.nkeys()+inc-1)
 	nodeAppendRange(new, old, 0, 0, idx)
 
