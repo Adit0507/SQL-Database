@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path"
