@@ -65,6 +65,7 @@ func (db*KV) pageWrite(ptr uint64) []byte {
 
 	node := make([]byte, BTREE_PAGE_SIZE)
 	copy(node, db.pageReadFile(ptr))
+	db.page.updates[ptr] =  node
 
 	return node
 }
@@ -181,18 +182,27 @@ func readRoot(db *KV, fileSize int64) error {
 		return errors.New("file is not a multiple of pages")
 	}
 	if fileSize == 0 { // empty file
-		db.page.flushed = 1 // the meta page is initialized on the 1st write
+		db.page.flushed = 2 // reserve 2 pages: meta & free list node
+		
+		db.free.headPage = 1
+		db.free.tailPage = 1
+		
 		return nil
 	}
 	// read the page
 	data := db.mmap.chunks[0]
 	loadMeta(db, data)
+
+	db.free.SetMaxSeq()
+
 	// verify the page
 	bad := !bytes.Equal([]byte(DB_SIG), data[:16])
 	// pointers are within range?
 	maxpages := uint64(fileSize / BTREE_PAGE_SIZE)
 	bad = bad || !(0 < db.page.flushed && db.page.flushed <= maxpages)
 	bad = bad || !(0 < db.tree.root && db.tree.root < db.page.flushed)
+	bad = bad || !(0 < db.free.headPage && db.free.headPage < db.page.flushed)
+	bad = bad || !(0 < db.free.tailPage && db.free.tailPage < db.page.flushed)
 	if bad {
 		return errors.New("bad meta page")
 	}
@@ -246,6 +256,9 @@ func updateFile(db *KV) error {
 	if err := db.Fsync(db.fd); err != nil {
 		return err
 	}
+
+	// preparing free list for next update
+	db.free.SetMaxSeq()
 	return nil
 }
 
