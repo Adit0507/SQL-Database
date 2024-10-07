@@ -47,8 +47,11 @@ func (db *KV) pageRead(ptr uint64) []byte {
 // `BTree.new`, allocate a new page.
 func (db *KV) pageAppend(node []byte) uint64 {
 	assert(len(node) == BTREE_PAGE_SIZE)
-	ptr := db.page.flushed + uint64(len(db.page.temp)) // just append
-	db.page.temp = append(db.page.temp, node)
+	ptr := db.page.flushed + db.page.nappend // just append
+	db.page.nappend++
+	assert(db.page.updates[ptr] == nil)
+	db.page.updates[ptr] = node
+
 	return ptr
 }
 
