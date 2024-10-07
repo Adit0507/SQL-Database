@@ -19,13 +19,15 @@ type KV struct {
 	// internals
 	fd   int
 	tree BTree
+	free FreeList
 	mmap struct {
 		total  int      // mmap size, can be larger than the file size
 		chunks [][]byte // multiple mmaps, can be non-continuous
 	}
 	page struct {
 		flushed uint64   // database size in number of pages
-		temp    [][]byte // newly allocated pages
+		nappend uint64	// no. of pages to be appended
+		updates map[uint64][]byte	//pending updates
 	}
 	failed bool // Did the last update fail?
 }
@@ -42,6 +44,42 @@ func (db *KV) pageRead(ptr uint64) []byte {
 		start = end
 	}
 	panic("bad ptr")
+}
+
+func (db*KV) pageAlloc(node []byte) uint64 {
+	assert(len(node) == BTREE_PAGE_SIZE)
+	if ptr := db.free.PopHead(); ptr != 0 {
+		assert(db.page.updates[ptr] == nil)
+		db.page.updates[ptr ] = node
+		return ptr
+	}
+
+	return db.pageAppend(node)
+}
+
+func (db*KV) pageWrite(ptr uint64) []byte {
+	assert(ptr < db.page.flushed+db.page.nappend)
+	if node, ok := db.page.updates[ptr]; ok {
+		return node
+	}
+
+	node := make([]byte, BTREE_PAGE_SIZE)
+	copy(node, db.pageReadFile(ptr))
+
+	return node
+}
+
+func (db*KV) pageReadFile(ptr uint64) []byte {
+	start := uint64(0)
+	for _, chunk :=range db.mmap.chunks {
+		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
+		if ptr < end {
+			offset := BTREE_PAGE_SIZE * (ptr - start)
+			return chunk[offset : offset+BTREE_PAGE_SIZE]
+		}
+		start = end
+	}
+	panic("bad pointer")
 }
 
 // `BTree.new`, allocate a new page.
@@ -88,8 +126,14 @@ func (db *KV) Open() error {
 	var err error
 	// B+tree callbacks
 	db.tree.get = db.pageRead
-	db.tree.new = db.pageAppend
-	db.tree.del = func(uint64) {}
+	db.tree.new = db.pageAlloc
+	db.tree.del = db.free.PushTail
+
+	// freelist callbacks
+	db.free.get = db.pageRead
+	db.free.new = db.pageAppend
+	db.free.set = db.pageWrite
+
 	// open or create the DB file
 	if db.fd, err = createFileSync(db.Path); err != nil {
 		return err
