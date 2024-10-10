@@ -277,7 +277,7 @@ func treeInsert(tree *BTree, node BNode, key []byte, val []byte) BNode {
 }
 
 // KV insertion to an internal node
-func nodeInsert(tree *BTree, new BNode, node BNode, idx uint16, key []byte, val []byte) {
+func nodeInsert(req *UpdateReq, new BNode, node BNode, idx uint16) BNode {
 	kptr := node.getPtr(idx)
 
 	// insertion to kid node
@@ -291,9 +291,7 @@ func nodeInsert(tree *BTree, new BNode, node BNode, idx uint16, key []byte, val 
 	req.tree.del(kptr)
 	nodeReplaceKidN(req.tree, new, node, idx, split[:nsplit]...)
 
-	nsplit, split := nodeSplit3(knode)
-	tree.del(kptr)
-	nodeReplaceKidN(tree, new, node, idx, split[:nsplit]...)
+	return new
 }
 
 func checkLimit(key []byte, val []byte) error {
