@@ -1,5 +1,11 @@
 package main
 
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+)
+
 const (
 	TYPE_ERROR = 0
 	TYPE_BYTES = 1
@@ -84,7 +90,7 @@ var INTERNAL_TABLES map[string]*TableDef = map[string]*TableDef{
 func reorderRecord(tdef *TableDef, rec Record) ([]Value, error) {
 	assert(len(rec.Cols) == len(rec.Vals))
 	out := make([]Value, len(tdef.Cols))
-	for i, c :=  range tdef.Cols {
+	for i, c := range tdef.Cols {
 		v := rec.Get(c)
 		if v == nil {
 			continue
@@ -92,22 +98,114 @@ func reorderRecord(tdef *TableDef, rec Record) ([]Value, error) {
 		if v.Type != tdef.Types[i] {
 			return nil, fmt.Errorf("bad column type: %s", c)
 		}
-		out[i] =*v
+		out[i] = *v
 	}
 
 	return out, nil
 }
 
 func valuesComplete(tdef *TableDef, vals []Value, n int) error {
-	for i, v:= range vals {
-		if i < n &&v.Type== 0 {
+	for i, v := range vals {
+		if i < n && v.Type == 0 {
 			return fmt.Errorf("missing column: %s", tdef.Cols[i])
-		} else if i >= n && v.Type != 0{
+		} else if i >= n && v.Type != 0 {
 			return fmt.Errorf("extra column: %s", tdef.Cols[i])
 		}
 	}
-	
+
 	return nil
+}
+
+// escape null byte so string doesnt contain no null byte
+func escapeString(in []byte) []byte {
+	toEscape := bytes.Count(in, []byte{0}) + bytes.Count(in, []byte{1})
+	if toEscape == 0 {
+		return in
+	}
+
+	out := make([]byte, len(in)+toEscape)
+	pos := 0
+	for _, ch := range in {
+		if ch <= 1 {
+			out[pos+0] = 0x01
+			out[pos+1] = ch + 1
+			pos += 2
+		} else {
+			out[pos] = ch
+			pos += 1
+		}
+	}
+	return out
+}
+
+func unescapeString(in []byte) []byte {
+	if bytes.Count(in, []byte{1}) == 0 {
+		return in
+	}
+
+	out := make([]byte, 0, len(in))
+	for i := 0; i < len(in); i++ {
+		if in[i] == 0x01 {
+			// 01 01 -> 00
+			i++
+			assert(in[i] == 1 || in[i] == 2)
+			out = append(out, in[i]-1)
+		} else {
+			out = append(out, in[i])
+		}
+
+	}
+
+	return out
+}
+
+// order preserving encoding
+func encodeValues(out []byte, vals []Value) []byte {
+	for _, v := range vals {
+		switch v.Type {
+		case TYPE_INT64:
+			var buf [8]byte
+			u := uint64(v.I64) + (1 << 63)        // flip the sign bit
+			binary.BigEndian.PutUint64(buf[:], u) // big endian
+			out = append(out, buf[:]...)
+		case TYPE_BYTES:
+			out = append(out, escapeString(v.Str)...)
+			out = append(out, 0) // null-terminated
+		default:
+			panic("what?")
+		}
+	}
+
+	return out
+}
+
+func encodeKey(out []byte, prefix uint32, vals []Value) []byte {
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], prefix)
+	out = append(out, buf[:]...)
+	out = encodeValues(out, vals)
+
+	return out
+}
+
+func decodeValues(in []byte, out []Value) {
+	for i := range out {
+		switch out[i].Type {
+		case TYPE_INT64:
+			u := binary.BigEndian.Uint64(in[:8])
+			out[i].I64 = int64(u - (1 << 63))
+			in = in[8:]
+		case TYPE_BYTES:
+			idx := bytes.IndexByte(in, 0)
+			assert(idx >= 0)
+			out[i].Str = unescapeString(in[:idx])
+			in = in[idx+1:]
+		default:
+			panic("what?")
+		}
+	}
+
+	assert(len(in) == 0)
 }
 
 // check for missing columns
@@ -118,7 +216,7 @@ func checkRecord(tdef *TableDef, rec Record, n int) ([]Value, error) {
 	}
 
 	err = valuesComplete(tdef, vals, n)
-	if err!= nil {
+	if err != nil {
 		return nil, err
 	}
 	return vals, nil
@@ -127,21 +225,27 @@ func checkRecord(tdef *TableDef, rec Record, n int) ([]Value, error) {
 // get a single row by primary key
 func dbGet(db *DB, tdef *TableDef, rec *Record) (bool, error) {
 	vals, err := checkRecord(tdef, *rec, tdef.PKeys)
+	if err != nil {
+		return false, err
+	}
+	// encode primary key
+	key := encodeKey(nil, tdef.Prefix, vals[:tdef.PKeys])
+	// query KV store
+	val, ok := db.kv.Get(key)
+	if !ok {
+		return false, nil
+	}
 
-	return false, nil
+	// decode value into cols
+	for i := tdef.PKeys; i < len(tdef.Cols); i++ {
+		vals[i].Type = tdef.Types[i]
+	}
+
+	decodeValues(val, vals[tdef.PKeys:])
+	rec.Cols = tdef.Cols
+	rec.Vals = vals
+	return true, nil
 }
-
-// get table schema by naem
-func getTableDef(db *DB, name string) *TableDef{
-	rec := (&Record{}).AddStr("name", []byte(name))	
-	ok, err := db
-
-}
-
-func (db *DB) Get(table string, rec *Record) (bool, error) {
-	tdef := 
-}
-
 
 func (db *DB) Insert(table string, rec Record) (bool, error)
 func (db *DB) Update(table string, rec Record) (bool, error)
