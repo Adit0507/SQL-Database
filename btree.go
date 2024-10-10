@@ -279,7 +279,17 @@ func treeInsert(tree *BTree, node BNode, key []byte, val []byte) BNode {
 // KV insertion to an internal node
 func nodeInsert(tree *BTree, new BNode, node BNode, idx uint16, key []byte, val []byte) {
 	kptr := node.getPtr(idx)
-	knode := treeInsert(tree, tree.get(kptr), key, val)
+
+	// insertion to kid node
+	updated := treeInsert(req, req.tree.get(kptr))
+	if len(updated) == 0 {
+		return BNode{}
+	}
+
+	nsplit, split := nodeSplit3(updated)
+	// deallocate kid node
+	req.tree.del(kptr)
+	nodeReplaceKidN(req.tree, new, node, idx, split[:nsplit]...)
 
 	nsplit, split := nodeSplit3(knode)
 	tree.del(kptr)
