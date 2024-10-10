@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 )
 
@@ -245,6 +246,44 @@ func dbGet(db *DB, tdef *TableDef, rec *Record) (bool, error) {
 	rec.Cols = tdef.Cols
 	rec.Vals = vals
 	return true, nil
+}
+
+func (db *DB) Get(table string, rec *Record) (bool, error) {
+	tdef := getTableDef(db, table)
+	if tdef == nil {
+		return false, fmt.Errorf("table not found: %s", table)
+	}
+
+	return dbGet(db, tdef, rec)
+}
+
+// get table schema by naem
+func getTableDef(db *DB, name string) *TableDef {
+	if tdef, ok := INTERNAL_TABLES[name]; ok {
+		return tdef // expose internal tables
+	}
+	tdef := db.tables[name]
+	if tdef == nil {
+		if tdef = getTableDefDB(db, name); tdef != nil {
+			db.tables[name] = tdef
+		}
+	}
+	return tdef
+}
+
+func getTableDefDB(db *DB, name string) *TableDef {
+	rec := (&Record{}).AddStr("name", []byte(name))
+	ok, err := dbGet(db, TDEF_TABLE, rec)
+	assert(err == nil)
+	if !ok {
+		return nil
+	}
+
+	tdef := &TableDef{}
+	err = json.Unmarshal(rec.Get("def").Str, tdef)
+	assert(err == nil)
+
+	return tdef
 }
 
 func (db *DB) Insert(table string, rec Record) (bool, error)
