@@ -294,7 +294,7 @@ type DBUpdateReq struct {
 }
 
 // add row to table
-func dbUpdate(db *DB, tdef *TableDef, dbreq*DBUpdateReq) (bool, error) {
+func dbUpdate(db *DB, tdef *TableDef, dbreq *DBUpdateReq) (bool, error) {
 	values, err := checkRecord(tdef, dbreq.Record, len(tdef.Cols))
 	if err != nil {
 		return false, err
@@ -311,7 +311,24 @@ func dbUpdate(db *DB, tdef *TableDef, dbreq*DBUpdateReq) (bool, error) {
 	return req.Updated, err
 }
 
-func (db *DB) Insert(table string, rec Record) (bool, error)
-func (db *DB) Update(table string, rec Record) (bool, error)
+// addin a record
+func (db *DB) Set(table string, dbreq *DBUpdateReq) (bool, error) {
+	tdef := getTableDef(db, table)
+	if tdef == nil {
+		return false, fmt.Errorf("table not found: %s", table)
+	}
+
+	return dbUpdate(db, tdef, dbreq)
+}
+
+func (db *DB) Insert(table string, rec Record) (bool, error) {
+	return db.Set(table, &DBUpdateReq{Record: rec, Mode: MODE_INSERT_ONLY})
+}
+func (db *DB) Update(table string, rec Record) (bool, error) {
+	return db.Set(table, &DBUpdateReq{Record: rec, Mode: MODE_UPDATE_ONLY})
+}
+func (db *DB) Upsert(table string, rec Record) (bool, error) {
+	return db.Set(table, &DBUpdateReq{Record: rec, Mode: MODE_UPSERT})
+}
+
 func (db *DB) Delete(table string, rec Record) (bool, error)
-func (db *DB) Upsert(table string, rec Record) (bool, error)
