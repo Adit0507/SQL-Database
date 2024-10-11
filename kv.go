@@ -162,18 +162,26 @@ fail:
 const DB_SIG = "BuildYourOwnDB06"
 
 // the 1st page stores the root pointer and other auxiliary data.
-// | sig | root_ptr | page_used |
-// | 16B |    8B    |     8B    |
+// | sig | root_ptr | page_used | head_page | head_seq | tail_page | tail_seq |
+// | 16B |    8B    |     8B    |     8B    |    8B    |     8B    |    8B    |
 func loadMeta(db *KV, data []byte) {
-	db.tree.root = binary.LittleEndian.Uint64(data[16:])
-	db.page.flushed = binary.LittleEndian.Uint64(data[24:])
+	db.tree.root = binary.LittleEndian.Uint64(data[16:24])
+	db.page.flushed = binary.LittleEndian.Uint64(data[24:32])
+	db.free.headPage = binary.LittleEndian.Uint64(data[32:40])
+	db.free.headSeq = binary.LittleEndian.Uint64(data[40:48])
+	db.free.tailPage = binary.LittleEndian.Uint64(data[48:56])
+	db.free.tailSeq  =binary.LittleEndian.Uint64(data[56:64])
 }
 
 func saveMeta(db *KV) []byte {
-	var data [32]byte
+	var data [64]byte
 	copy(data[:16], []byte(DB_SIG))
-	binary.LittleEndian.PutUint64(data[16:], db.tree.root)
-	binary.LittleEndian.PutUint64(data[24:], db.page.flushed)
+	binary.LittleEndian.PutUint64(data[16:24], db.tree.root)
+	binary.LittleEndian.PutUint64(data[24:32], db.page.flushed)
+	binary.LittleEndian.PutUint64(data[32:40], db.free.headPage)
+	binary.LittleEndian.PutUint64(data[40:48], db.free.headSeq)
+	binary.LittleEndian.PutUint64(data[48:56], db.free.tailPage)
+	binary.LittleEndian.PutUint64(data[56:64], db.free.tailSeq)
 	return data[:]
 }
 
