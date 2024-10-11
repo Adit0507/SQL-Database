@@ -257,6 +257,60 @@ func (db *DB) Get(table string, rec *Record) (bool, error) {
 	return dbGet(db, tdef, rec)
 }
 
+const TABLE_PREFIX_MIN = 100
+
+func tableDefCheck(tdef *TableDef) error {
+	// very table schema
+	bad := tdef.Name == "" || len(tdef.Cols) == 0
+	bad = bad || len(tdef.Cols) != len(tdef.Types)
+	bad = bad || !(1 <= tdef.PKeys && int(tdef.PKeys) <= len(tdef.Cols))
+	if bad {
+		return fmt.Errorf("bad table schema: %s", tdef.Name)
+	}
+
+	return nil
+}
+
+func (db *DB) TableNew(tdef *TableDef) error {
+	if err := tableDefCheck(tdef); err != nil {
+		return err
+	}
+
+	// check existing table
+	table := (&Record{}).AddStr("name", []byte(tdef.Name))
+	ok, err := dbGet(db, TDEF_TABLE, table)
+	assert(err == nil)
+	if ok {
+		return fmt.Errorf("table exists: %s", tdef.Name)
+	}
+
+	// alllocate a new prefix
+	assert(tdef.Prefix == 0)
+	tdef.Prefix = TABLE_PREFIX_MIN
+	meta := (&Record{}).AddStr("key", []byte("next_prefix"))
+	ok, err = dbGet(db, TDEF_META, meta)
+	assert(err == nil)
+	if ok {
+		tdef.Prefix = binary.LittleEndian.Uint32(meta.Get("val").Str)
+		assert(tdef.Prefix > TABLE_PREFIX_MIN)
+	} else {
+		meta.AddStr("val", make([]byte, 4))
+	}
+
+	binary.LittleEndian.PutUint32(meta.Get("val").Str, tdef.Prefix+1)
+	_, err = dbUpdate(db, TDEF_META, &DBUpdateReq{Record: *meta})
+	if err != nil {
+		return err
+	}
+
+	val, err := json.Marshal(tdef)
+	assert(err == nil)
+	table.AddStr("def", val)
+	_, err = dbUpdate(db, TDEF_TABLE, &DBUpdateReq{Record: *table})
+
+	return err
+}
+
 // get table schema by naem
 func getTableDef(db *DB, name string) *TableDef {
 	if tdef, ok := INTERNAL_TABLES[name]; ok {
@@ -351,7 +405,7 @@ func (db *DB) Delete(table string, rec Record) (bool, error) {
 	return dbDelete(db, tdef, rec)
 }
 
-func (db*DB) Open() error {
+func (db *DB) Open() error {
 	db.kv.Path = db.Path
 	db.tables = map[string]*TableDef{}
 
@@ -359,6 +413,6 @@ func (db*DB) Open() error {
 	return db.kv.Open()
 }
 
-func (db*DB) Close()  {
+func (db *DB) Close() {
 	db.kv.Close()
 }
