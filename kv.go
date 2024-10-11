@@ -309,13 +309,19 @@ func writePages(db *KV) error {
 func (db *KV) Get(key []byte) ([]byte, bool) {
 	return db.tree.Get(key)
 }
-func (db *KV) Set(key []byte, val []byte) error {
-	meta := saveMeta(db)
-	if err := db.tree.Insert(key, val); err != nil {
-		return err
-	}
-	return updateOrRevert(db, meta)
+func (db *KV) Set(key []byte, val []byte) (bool, error) {
+	return db.Update(&UpdateReq{Key: key, Val: val})
 }
+
+func (db*KV) Update(req *UpdateReq) (bool, error) {
+	meta := saveMeta(db)
+	if updated, err := db.tree.Update(req); !updated {
+		return false, err
+	}
+	err := updateOrRevert(db, meta)
+	return err == nil, err
+}
+
 func (db *KV) Del(key []byte) (bool, error) {
 	meta := saveMeta(db)
 	if deleted, err := db.tree.Delete(key); !deleted {
