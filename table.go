@@ -331,4 +331,34 @@ func (db *DB) Upsert(table string, rec Record) (bool, error) {
 	return db.Set(table, &DBUpdateReq{Record: rec, Mode: MODE_UPSERT})
 }
 
-func (db *DB) Delete(table string, rec Record) (bool, error)
+// delete a record by primary key
+func dbDelete(db *DB, tdef *TableDef, rec Record) (bool, error) {
+	vals, err := checkRecord(tdef, rec, tdef.PKeys)
+	if err != nil {
+		return false, err
+	}
+
+	key := encodeKey(nil, tdef.Prefix, vals[:tdef.PKeys])
+	return db.kv.Del(key)
+}
+
+func (db *DB) Delete(table string, rec Record) (bool, error) {
+	tdef := getTableDef(db, table)
+	if tdef == nil {
+		return false, fmt.Errorf("table not found: %s", table)
+	}
+
+	return dbDelete(db, tdef, rec)
+}
+
+func (db*DB) Open() error {
+	db.kv.Path = db.Path
+	db.tables = map[string]*TableDef{}
+
+	// opening kv store
+	return db.kv.Open()
+}
+
+func (db*DB) Close()  {
+	db.kv.Close()
+}
