@@ -286,6 +286,31 @@ func getTableDefDB(db *DB, name string) *TableDef {
 	return tdef
 }
 
+type DBUpdateReq struct {
+	Record  Record
+	Mode    int
+	Updated bool
+	Added   bool
+}
+
+// add row to table
+func dbUpdate(db *DB, tdef *TableDef, dbreq*DBUpdateReq) (bool, error) {
+	values, err := checkRecord(tdef, dbreq.Record, len(tdef.Cols))
+	if err != nil {
+		return false, err
+	}
+
+	key := encodeKey(nil, tdef.Prefix, values[:tdef.PKeys])
+	val := encodeValues(nil, values[tdef.PKeys:])
+	req := UpdateReq{Key: key, Val: val, Mode: dbreq.Mode}
+	if _, err := db.kv.Update(&req); err != nil {
+		return false, err
+	}
+
+	dbreq.Added, dbreq.Updated = req.Added, req.Updated
+	return req.Updated, err
+}
+
 func (db *DB) Insert(table string, rec Record) (bool, error)
 func (db *DB) Update(table string, rec Record) (bool, error)
 func (db *DB) Delete(table string, rec Record) (bool, error)
