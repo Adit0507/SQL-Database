@@ -25,9 +25,9 @@ type KV struct {
 		chunks [][]byte // multiple mmaps, can be non-continuous
 	}
 	page struct {
-		flushed uint64   // database size in number of pages
-		nappend uint64	// no. of pages to be appended
-		updates map[uint64][]byte	//pending updates
+		flushed uint64            // database size in number of pages
+		nappend uint64            // no. of pages to be appended
+		updates map[uint64][]byte //pending updates
 	}
 	failed bool // Did the last update fail?
 }
@@ -46,18 +46,18 @@ func (db *KV) pageRead(ptr uint64) []byte {
 	panic("bad ptr")
 }
 
-func (db*KV) pageAlloc(node []byte) uint64 {
+func (db *KV) pageAlloc(node []byte) uint64 {
 	assert(len(node) == BTREE_PAGE_SIZE)
 	if ptr := db.free.PopHead(); ptr != 0 {
 		assert(db.page.updates[ptr] == nil)
-		db.page.updates[ptr ] = node
+		db.page.updates[ptr] = node
 		return ptr
 	}
 
 	return db.pageAppend(node)
 }
 
-func (db*KV) pageWrite(ptr uint64) []byte {
+func (db *KV) pageWrite(ptr uint64) []byte {
 	assert(ptr < db.page.flushed+db.page.nappend)
 	if node, ok := db.page.updates[ptr]; ok {
 		return node
@@ -65,14 +65,14 @@ func (db*KV) pageWrite(ptr uint64) []byte {
 
 	node := make([]byte, BTREE_PAGE_SIZE)
 	copy(node, db.pageReadFile(ptr))
-	db.page.updates[ptr] =  node
+	db.page.updates[ptr] = node
 
 	return node
 }
 
-func (db*KV) pageReadFile(ptr uint64) []byte {
+func (db *KV) pageReadFile(ptr uint64) []byte {
 	start := uint64(0)
-	for _, chunk :=range db.mmap.chunks {
+	for _, chunk := range db.mmap.chunks {
 		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
 		if ptr < end {
 			offset := BTREE_PAGE_SIZE * (ptr - start)
@@ -183,10 +183,10 @@ func readRoot(db *KV, fileSize int64) error {
 	}
 	if fileSize == 0 { // empty file
 		db.page.flushed = 2 // reserve 2 pages: meta & free list node
-		
+
 		db.free.headPage = 1
 		db.free.tailPage = 1
-		
+
 		return nil
 	}
 	// read the page
@@ -283,25 +283,29 @@ func updateOrRevert(db *KV, meta []byte) error {
 		// in-memory states are reverted immediately to allow reads
 		loadMeta(db, meta)
 		// discard temporaries
-		db.page.temp = db.page.temp[:0]
+		db.page.nappend = 0
+		db.page.updates = map[uint64][]byte{}
 	}
 	return err
 }
 
 func writePages(db *KV) error {
 	// extend the mmap if needed
-	size := (int(db.page.flushed) + len(db.page.temp)) * BTREE_PAGE_SIZE
+	size := (int(db.page.flushed + db.page.nappend)) * BTREE_PAGE_SIZE
 	if err := extendMmap(db, size); err != nil {
 		return err
 	}
 	// write data pages to the file
-	offset := int64(db.page.flushed * BTREE_PAGE_SIZE)
-	if _, err := unix.Pwritev(db.fd, db.page.temp, offset); err != nil {
-		return err
+	for ptr, node := range db.page.updates {
+		offset := int64(ptr * BTREE_PAGE_SIZE)
+		if _, err := unix.Pwrite(db.fd, node, offset); err != nil {
+			return err
+		}
 	}
 	// discard in-memory data
-	db.page.flushed += uint64(len(db.page.temp))
-	db.page.temp = db.page.temp[:0]
+	db.page.flushed += db.page.nappend
+	db.page.nappend = 0
+	db.page.updates = map[uint64][]byte{}
 	return nil
 }
 
@@ -313,7 +317,7 @@ func (db *KV) Set(key []byte, val []byte) (bool, error) {
 	return db.Update(&UpdateReq{Key: key, Val: val})
 }
 
-func (db*KV) Update(req *UpdateReq) (bool, error) {
+func (db *KV) Update(req *UpdateReq) (bool, error) {
 	meta := saveMeta(db)
 	if updated, err := db.tree.Update(req); !updated {
 		return false, err
