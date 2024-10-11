@@ -253,22 +253,37 @@ func nodeSplit3(old BNode) (uint16, [3]BNode) {
 	return 3, [3]BNode{mostLeft, middle, right}
 }
 
+const (
+	MODE_UPSERT      = 0 //insert or replace
+	MODE_UPDATE_ONLY = 1 // update existing keys
+	MODE_INSERT_ONLY = 2 //add only new keys
+)
+
+type UpdateReq struct {
+	tree  *BTree
+	Added bool	// new key
+	Updated bool
+	Key   []byte
+	Val   []byte
+	Mode  int
+}
+
 // tree insertion- inserts a KV into a node
-func treeInsert(tree *BTree, node BNode, key []byte, val []byte) BNode {
+func treeInsert(req *UpdateReq, node BNode) BNode {
 	new := BNode(make([]byte, 2*BTREE_PAGE_SIZE))
 
-	idx := nodeLookupLE(node, key)
+	idx := nodeLookupLE(node, req.Key)
 	switch node.btype() {
 	case BNODE_LEAF:
-		if bytes.Equal(key, node.getKey(idx)) {
+		if bytes.Equal(req.Key, node.getKey(idx)) {
 			// updating the key
-			leafUpdate(new, node, idx, key, val)
+			leafUpdate(new, node, idx, req.Key, req.Val)
 		} else {
-			leafInsert(new, node, idx+1, key, val)
+			leafInsert(new, node, idx+1, req.Key, req.Val)
 		}
 
 	case BNODE_NODE:
-		nodeInsert(tree, new, node, idx, key, val)
+		nodeInsert(req, new, node, idx)
 	default:
 		panic("bad node!")
 	}
@@ -304,42 +319,6 @@ func checkLimit(key []byte, val []byte) error {
 	}
 	if len(key) > BTREE_MAX_VAL_SIZE {
 		return errors.New("value too long")
-	}
-
-	return nil
-}
-
-func (tree *BTree) Insert(key []byte, val []byte) error {
-	if err := checkLimit(key, val); err != nil {
-		return err
-	}
-
-	// creating first node
-	if tree.root == 0 {
-		root := BNode(make([]byte, BTREE_PAGE_SIZE))
-		root.setHeader(BNODE_LEAF, 2)
-
-		nodeAppendKV(root, 0, 0, nil, nil)
-		nodeAppendKV(root, 1, 0, key, val)
-		tree.root = tree.new(root)
-
-		return nil
-	}
-
-	node := treeInsert(tree, tree.get(tree.root), key, val)
-	nsplit, splt := nodeSplit3(node)
-	tree.del(tree.root)
-	if nsplit > 1 {
-		// splitng root, add a new level
-		root := BNode(make([]byte, BTREE_PAGE_SIZE))
-		root.setHeader(BNODE_NODE, nsplit)
-		for i, knode := range splt[:nsplit] {
-			ptr, key := tree.new(knode), knode.getKey(0)
-			nodeAppendKV(root, uint16(i), ptr, key, nil)
-		}
-		tree.root = tree.new(root)
-	} else {
-		tree.root = tree.new(splt[0])
 	}
 
 	return nil
@@ -443,6 +422,51 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 	return new
 }
 
+func (tree *BTree) Upsert(key []byte, val []byte) (bool, error) {
+	return tree.Update(&UpdateReq{Key: key, Val: val})
+}
+
+func (tree *BTree) Update(req *UpdateReq) (bool, error) {
+	if err := checkLimit(req.Key, req.Val); err != nil {
+		return false, err
+	}
+
+	if tree.root == 0 {
+		// create first node
+		root := BNode(make([]byte, BTREE_PAGE_SIZE))
+		root.setHeader(BNODE_LEAF, 2)
+		
+		nodeAppendKV(root, 0, 0, nil, nil)
+		nodeAppendKV(root, 1, 0, req.Key, req.Val)
+		tree.root = tree.new(root)
+		req.Added = true
+		req.Updated = true
+		return true, nil
+	}
+
+	req.tree = tree
+	updated := treeInsert(req, tree.get(tree.root))
+	if len(updated) == 0{
+		return false, nil
+	}
+
+	nsplit, split := nodeSplit3(updated)
+	tree.del(tree.root)
+	if nsplit > 1 {
+		root := BNode(make([]byte,BTREE_PAGE_SIZE))
+		root.setHeader(BNODE_NODE, nsplit)
+		for i, knode := range split[:nsplit] {
+			ptr, key := tree.new(knode), knode.getKey(0)
+			nodeAppendKV(root, uint16(i), ptr, key, nil)
+		}
+		tree.root = tree.new(root)
+	} else {
+		tree.root = tree.new(split[0])
+	}
+
+	return true, nil
+}
+
 func (tree *BTree) Delete(key []byte) (bool, error) {
 	if err := checkLimit(key, nil); err != nil {
 		return false, err
@@ -472,7 +496,7 @@ func nodeGetKey(tree *BTree, node BNode, key []byte) ([]byte, bool) {
 	case BNODE_LEAF:
 		if bytes.Equal(key, node.getKey(idx)) {
 			return node.getVal(idx), true
-		}else {
+		} else {
 			return nil, false
 		}
 	case BNODE_NODE:
@@ -485,7 +509,7 @@ func nodeGetKey(tree *BTree, node BNode, key []byte) ([]byte, bool) {
 
 func (tree *BTree) Get(key []byte) ([]byte, bool) {
 	if tree.root == 0 {
-		return nil ,false
+		return nil, false
 	}
 
 	return nodeGetKey(tree, tree.get(tree.root), key)
