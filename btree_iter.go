@@ -1,5 +1,7 @@
 package main
 
+import "bytes"
+
 type BIter struct {
 	tree *BTree
 	path []BNode
@@ -76,8 +78,8 @@ func (tree *BTree) SeekLE(key []byte) *BIter {
 // get current KV pair
 func (iter *BIter) Deref() ([]byte, []byte) {
 	assert(iter.Valid())
-	last := len(iter.path) -1
-	node:= iter.path[last]
+	last := len(iter.path) - 1
+	node := iter.path[last]
 	pos := iter.pos[last]
 
 	return node.getKey(pos), node.getVal(pos)
@@ -91,4 +93,55 @@ func iterIsEnd(iter *BIter) bool {
 // precondition of Dref()
 func (iter *BIter) Valid() bool {
 	return !(iterIsFirst(iter) || iterIsEnd(iter))
+}
+
+const (
+	CMP_GE = +3 // >=
+	CMP_GT = +2 // >
+	CMP_LT = -2 // <
+	CMP_LE = -3 // <=
+)
+
+func cmpOk(key []byte, cmp int, ref []byte) bool {
+	r := bytes.Compare(key, ref)
+
+	switch cmp {
+	case CMP_GE:
+		return r >= 0
+
+	case CMP_GT:
+		return r > 0
+	case CMP_LE:
+		return r <= 0
+	case CMP_LT:
+		return r < 0
+	default:
+		panic("what>")
+	}
+}
+
+func (tree *BTree) Seek(key []byte, cmp int) *BIter {
+	iter := tree.SeekLE(key)
+	assert(iterIsFirst(iter) || !iterIsEnd(iter))
+	if cmp != CMP_LE {
+		cur := []byte(nil)
+		if !iterIsFirst(iter) {
+			cur, _ = iter.Deref()
+		}
+
+		if len(key) == 0 || !cmpOk(cur, cmp, key) {
+			if cmp > 0 {
+				iter.Next()
+			} else {
+				iter.Prev()
+			}
+		}
+	}
+
+	if iter.Valid() {
+		cur, _ := iter.Deref()
+		assert(cmpOk(cur, cmp, key))
+	}
+
+	return iter
 }
