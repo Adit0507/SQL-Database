@@ -189,6 +189,10 @@ func encodeKey(out []byte, prefix uint32, vals []Value) []byte {
 	return out
 }
 
+func decodeKey(in []byte, out []Value) {
+	decodeValues(in[4:], out)
+}
+
 func decodeValues(in []byte, out []Value) {
 	for i := range out {
 		switch out[i].Type {
@@ -415,4 +419,59 @@ func (db *DB) Open() error {
 
 func (db *DB) Close() {
 	db.kv.Close()
+}
+
+// scanner decodes KV's into rows
+// iterator for range queries
+// Scanner is a wrapper for B+ Tree iterator
+type Scanner struct {
+	Cmp1 int
+	Cmp2 int
+
+	// range from Key 1 to key2
+	Key1 Record
+	Key2 Record
+
+	// internal
+	tdef   *TableDef
+	iter   *BIter
+	keyEnd []byte
+}
+
+// within range or not
+func (sc *Scanner) Valid() bool {
+	if !sc.iter.Valid() {
+		return false
+	}
+
+	key, _ := sc.iter.Deref()
+	return cmpOk(key, sc.Cmp2, sc.keyEnd)
+}
+
+// movin underlying B+ tree iterator
+func (sc *Scanner) Next() {
+	assert(sc.Valid())
+	if sc.Cmp1 > 0 {
+		sc.iter.Next()
+	} else {
+		sc.iter.Prev()
+	}
+}
+
+// return current row
+func (sc *Scanner) Deref(rec *Record) {
+	assert(sc.Valid())
+
+	// fetch KV from iterator
+	key, val := sc.iter.Deref()
+
+	// decode KV into cols
+	rec.Cols = sc.tdef.Cols
+	rec.Vals= rec.Vals[:0]
+	for _, type_ := range sc.tdef.Types{
+		rec.Vals = append(rec.Vals, Value{Type: type_})
+	}
+
+	decodeKey(key, rec.Vals[:sc.tdef.PKeys])
+	decodeValues(val, rec.Vals[sc.tdef.PKeys:])
 }
