@@ -467,11 +467,49 @@ func (sc *Scanner) Deref(rec *Record) {
 
 	// decode KV into cols
 	rec.Cols = sc.tdef.Cols
-	rec.Vals= rec.Vals[:0]
-	for _, type_ := range sc.tdef.Types{
+	rec.Vals = rec.Vals[:0]
+	for _, type_ := range sc.tdef.Types {
 		rec.Vals = append(rec.Vals, Value{Type: type_})
 	}
 
 	decodeKey(key, rec.Vals[:sc.tdef.PKeys])
 	decodeValues(val, rec.Vals[sc.tdef.PKeys:])
+}
+
+func dbScan(db *DB, tdef *TableDef, req *Scanner) error {
+	switch {
+	case req.Cmp1 > 0 && req.Cmp2 < 0:
+	case req.Cmp1 < 0 && req.Cmp2 > 0:
+	default:
+		return fmt.Errorf("bad range")
+	}
+
+	req.tdef = tdef
+
+	// reorder input cols acc. to schema
+	val1, err := checkRecord(tdef, req.Key1, tdef.PKeys)
+	if err != nil {
+		return err
+	}
+	val2, err := checkRecord(tdef, req.Key2, tdef.PKeys)
+	if err != nil {
+		return err
+	}
+
+	// encode primary key
+	keyStart := encodeKey(nil, tdef.Prefix, val1[:tdef.PKeys])
+	req.keyEnd = encodeKey(nil, tdef.Prefix, val2[:tdef.PKeys])
+
+	// seek to start key
+	req.iter = db.kv.tree.Seek(keyStart, req.Cmp1)
+	return nil
+}
+
+func (db *DB) Scan(table string, req *Scanner) error {
+	tdef := getTableDef(db, table)
+	if tdef == nil {
+		return fmt.Errorf("table not found: %s", table)
+	}
+
+	return dbScan(db, tdef, req)
 }
