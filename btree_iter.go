@@ -74,7 +74,21 @@ func (tree *BTree) SeekLE(key []byte) *BIter {
 }
 
 // get current KV pair
-func (iter *BIter) Deref() ([]byte, []byte)
+func (iter *BIter) Deref() ([]byte, []byte) {
+	assert(iter.Valid())
+	last := len(iter.path) -1
+	node:= iter.path[last]
+	pos := iter.pos[last]
+
+	return node.getKey(pos), node.getVal(pos)
+}
+
+func iterIsEnd(iter *BIter) bool {
+	last := len(iter.path) - 1
+	return last < 0 || iter.pos[last] >= iter.path[last].nkeys()
+}
 
 // precondition of Dref()
-func (iter *BIter) Valid() bool
+func (iter *BIter) Valid() bool {
+	return !(iterIsFirst(iter) || iterIsEnd(iter))
+}
