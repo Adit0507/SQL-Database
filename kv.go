@@ -334,9 +334,9 @@ func (db *KV) Update(req *UpdateReq) (bool, error) {
 	return err == nil, err
 }
 
-func (db *KV) Del(key []byte) (bool, error) {
+func (db *KV) Del(req *DeleteReq) (bool, error) {
 	meta := saveMeta(db)
-	if deleted, err := db.tree.Delete(key); !deleted {
+	if deleted, err := db.tree.Delete(req); !deleted {
 		return false, err
 	}
 	err := updateOrRevert(db, meta)
