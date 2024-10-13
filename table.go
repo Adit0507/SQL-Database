@@ -181,6 +181,15 @@ func encodeValues(out []byte, vals []Value) []byte {
 	return out
 }
 
+// for input range, which can be prefix of index key
+func encodeKeyPartial(out []byte, prefix uint32, vals []Value, cmp int) []byte {
+	out = encodeKey(out, prefix, vals)
+	if cmp == CMP_GT || cmp == CMP_LE {
+		out = append(out, 0xff)
+	}
+	return out
+}
+
 func encodeKey(out []byte, prefix uint32, vals []Value) []byte {
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], prefix)
@@ -282,12 +291,48 @@ func tableDefCheck(tdef *TableDef) error {
 	// very table schema
 	bad := tdef.Name == "" || len(tdef.Cols) == 0
 	bad = bad || len(tdef.Cols) != len(tdef.Types)
-	bad = bad || !(1 <= tdef.PKeys && int(tdef.PKeys) <= len(tdef.Cols))
 	if bad {
 		return fmt.Errorf("bad table schema: %s", tdef.Name)
 	}
 
+	// verifyin indexes
+	for i, index := range tdef.Indexes {
+		index, err := checkIndexCols(tdef, index)
+		if err != nil {
+			return err
+		}
+		tdef.Indexes[i] = index
+	}
+
 	return nil
+}
+
+func checkIndexCols(tdef *TableDef, index []string) ([]string, error) {
+	if len(index) == 0 {
+		return nil, fmt.Errorf("empty index")
+	}
+
+	seen := map[string]bool{}
+	for _, c := range index {
+		// check index cols
+		if slices.Index(tdef.Cols, c) < 0 {
+			return nil, fmt.Errorf("unknown index column: %s", c)
+		}
+		if seen[c] {
+			return nil, fmt.Errorf("duplicated column index: %s", c)
+		}
+
+		seen[c] = true
+	}
+
+	// addin primary key to index
+	for _, c := range tdef.Indexes[0] {
+		if !seen[c] {
+			index = append(index, c)
+		}
+	}
+	assert(len(index) <= len(tdef.Cols))
+	return index, nil
 }
 
 func (db *DB) TableNew(tdef *TableDef) error {
@@ -454,6 +499,8 @@ type Scanner struct {
 	Key2 Record
 
 	// internal
+	db     *DB
+	index  int
 	tdef   *TableDef
 	iter   *BIter
 	keyEnd []byte
