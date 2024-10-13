@@ -260,12 +260,13 @@ const (
 )
 
 type UpdateReq struct {
-	tree  *BTree
-	Added bool	// new key
+	tree    *BTree
+	Added   bool // new key
 	Updated bool
-	Key   []byte
-	Val   []byte
-	Mode  int
+	Old     []byte	//value before update
+	Key     []byte
+	Val     []byte
+	Mode    int
 }
 
 // tree insertion- inserts a KV into a node
@@ -435,7 +436,7 @@ func (tree *BTree) Update(req *UpdateReq) (bool, error) {
 		// create first node
 		root := BNode(make([]byte, BTREE_PAGE_SIZE))
 		root.setHeader(BNODE_LEAF, 2)
-		
+
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, req.Key, req.Val)
 		tree.root = tree.new(root)
@@ -446,14 +447,14 @@ func (tree *BTree) Update(req *UpdateReq) (bool, error) {
 
 	req.tree = tree
 	updated := treeInsert(req, tree.get(tree.root))
-	if len(updated) == 0{
+	if len(updated) == 0 {
 		return false, nil
 	}
 
 	nsplit, split := nodeSplit3(updated)
 	tree.del(tree.root)
 	if nsplit > 1 {
-		root := BNode(make([]byte,BTREE_PAGE_SIZE))
+		root := BNode(make([]byte, BTREE_PAGE_SIZE))
 		root.setHeader(BNODE_NODE, nsplit)
 		for i, knode := range split[:nsplit] {
 			ptr, key := tree.new(knode), knode.getKey(0)
