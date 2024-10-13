@@ -164,6 +164,7 @@ func unescapeString(in []byte) []byte {
 // order preserving encoding
 func encodeValues(out []byte, vals []Value) []byte {
 	for _, v := range vals {
+		out = append(out, byte(v.Type))
 		switch v.Type {
 		case TYPE_INT64:
 			var buf [8]byte
@@ -417,22 +418,83 @@ type DBUpdateReq struct {
 	Added   bool
 }
 
+func nonPrimaryKeyCols(tdef *TableDef) (out []string) {
+	for _, c := range tdef.Cols {
+		if slices.Index(tdef.Indexes[0], c) < 0 {
+			out = append(out, c)
+		}
+	}
+	return
+}
+
+const (
+	INDEX_ADD = 1
+	INDEX_DEL = 2
+)
+
+// ADD OR REMOVE SECONDARY INDEX KEYS
+func indexOP(db *DB, tdef *TableDef, op int, rec Record) error {
+	for i := 1; i < len(tdef.Indexes); i++ {
+		vals, err := getValues(tdef, rec, tdef.Indexes[i])
+		assert(err == nil)
+		key := encodeKey(nil, tdef.Prefixes[i], vals)
+
+		switch op {
+		case INDEX_ADD:
+			req := UpdateReq{Key: key, Val: nil}
+			_, err := db.kv.Update(&req)
+			assert(err != nil || req.Added) // internal consistency
+		case INDEX_DEL:
+			deleted := false
+			deleted, err = db.kv.Del(&DeleteReq{Key: key})
+			assert(err != nil || deleted)
+		default:
+			panic("unreachable")
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // add row to table
 func dbUpdate(db *DB, tdef *TableDef, dbreq *DBUpdateReq) (bool, error) {
-	values, err := checkRecord(tdef, dbreq.Record, len(tdef.Cols))
+	cols := slices.Concat(tdef.Indexes[0], nonPrimaryKeyCols(tdef))
+	values, err := getValues(tdef, dbreq.Record, cols)
 	if err != nil {
 		return false, err
 	}
 
-	key := encodeKey(nil, tdef.Prefix, values[:tdef.PKeys])
-	val := encodeValues(nil, values[tdef.PKeys:])
+	// insert row
+	np := len(tdef.Indexes[0])
+	key := encodeKey(nil, tdef.Prefixes[0], values[:np])
+	val := encodeValues(nil, values[np:])
 	req := UpdateReq{Key: key, Val: val, Mode: dbreq.Mode}
 	if _, err := db.kv.Update(&req); err != nil {
 		return false, err
 	}
 
 	dbreq.Added, dbreq.Updated = req.Added, req.Updated
-	return req.Updated, err
+
+	// maintain secondary indexes
+	if req.Updated && !req.Added {
+		decodeValues(req.Old, values[np:])
+		oldRec := Record{cols, values}
+		// delete indexed keys
+		if err = indexOP(db, tdef, INDEX_DEL, oldRec); err != nil {
+			return false, err
+		}
+	}
+
+	if req.Updated {
+		if err = indexOP(db, tdef, INDEX_ADD, dbreq.Record); err != nil {
+			return false, err
+		}
+	}
+
+	return req.Updated, nil
 }
 
 // addin a record
@@ -457,13 +519,30 @@ func (db *DB) Upsert(table string, rec Record) (bool, error) {
 
 // delete a record by primary key
 func dbDelete(db *DB, tdef *TableDef, rec Record) (bool, error) {
-	vals, err := checkRecord(tdef, rec, tdef.PKeys)
+	vals, err := getValues(tdef, rec, tdef.Indexes[0])
 	if err != nil {
 		return false, err
 	}
 
-	key := encodeKey(nil, tdef.Prefix, vals[:tdef.PKeys])
-	return db.kv.Del(key)
+	// delete row
+	key := encodeKey(nil, tdef.Prefixes[0], vals)
+	req := DeleteReq{Key: key}
+	if deleted, err := db.kv.Del(&req); !deleted {
+		return false, err
+	}
+
+	for _, c := range nonPrimaryKeyCols(tdef) {
+		tp := tdef.Types[slices.Index(tdef.Cols, c)]
+		vals = append(vals, Value{Type: tp})
+	}
+
+	decodeValues(req.Old, vals[len(tdef.Indexes[0]):])
+	old :=Record{tdef.Cols, vals}
+	if err = indexOP(db, tdef, INDEX_DEL, old); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (db *DB) Delete(table string, rec Record) (bool, error) {
@@ -529,19 +608,44 @@ func (sc *Scanner) Next() {
 // return current row
 func (sc *Scanner) Deref(rec *Record) {
 	assert(sc.Valid())
+	tdef := sc.tdef
 
 	// fetch KV from iterator
 	key, val := sc.iter.Deref()
 
-	// decode KV into cols
-	rec.Cols = sc.tdef.Cols
+	// prepare output record
+	rec.Cols = slices.Concat(tdef.Indexes[0], nonPrimaryKeyCols(tdef))
 	rec.Vals = rec.Vals[:0]
-	for _, type_ := range sc.tdef.Types {
-		rec.Vals = append(rec.Vals, Value{Type: type_})
+	for _, c := range rec.Cols {
+		tp := tdef.Types[slices.Index(tdef.Cols, c)]
+		rec.Vals = append(rec.Vals, Value{Type: tp})
 	}
 
-	decodeKey(key, rec.Vals[:sc.tdef.PKeys])
-	decodeValues(val, rec.Vals[sc.tdef.PKeys:])
+	if sc.index == 0 {
+		// decode full row
+		np := len(tdef.Indexes[0])
+		decodeKey(key, rec.Vals[:np])
+		decodeValues(val, rec.Vals[np:])
+	} else {
+		// decode index key
+		assert(len(val) == 0)
+		index := tdef.Indexes[sc.index]
+		irec := Record{index, make([]Value, len(index))}		
+	
+		for i, c := range index {
+			irec.Vals[i].Type = tdef.Types[slices.Index(tdef.Cols, c)]
+		}
+		decodeKey(key, irec.Vals)
+		
+		// extract primary key
+		for i, c := range tdef.Indexes[0] {
+			rec.Vals[i] = *irec.Get(c)
+		}
+
+		// fetch row by primary key
+		ok, err := dbGet(sc.db, tdef, rec)
+		assert(ok && err == nil)
+	}
 }
 
 // check col. types
