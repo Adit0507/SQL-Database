@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 const (
@@ -20,11 +21,11 @@ type DB struct {
 }
 
 type TableDef struct {
-	Name   string
-	Types  []uint32 //col type
-	Cols   []string //col name
-	PKeys  int
-	Prefix uint32
+	Name     string
+	Types    []uint32 //col type
+	Cols     []string //col name
+	Prefixes []uint32
+	Indexes  [][]string
 }
 
 // table cell
@@ -66,20 +67,20 @@ func (rec *Record) Get(key string) *Value {
 // INTERNAL TABLES
 // store metadata
 var TDEF_META = &TableDef{
-	Prefix: 1,
-	Name:   "@meta",
-	Types:  []uint32{TYPE_BYTES, TYPE_BYTES},
-	Cols:   []string{"key", "val"},
-	PKeys:  1,
+	Name:     "@meta",
+	Types:    []uint32{TYPE_BYTES, TYPE_BYTES},
+	Cols:     []string{"key", "val"},
+	Prefixes: []uint32{1},
+	Indexes:  [][]string{{"key"}},
 }
 
 // store table schemas
 var TDEF_TABLE = &TableDef{
-	Prefix: 2,
-	Name:   "@table",
-	Types:  []uint32{TYPE_BYTES, TYPE_BYTES},
-	Cols:   []string{"name", "def"},
-	PKeys:  1,
+	Name:     "@table",
+	Types:    []uint32{TYPE_BYTES, TYPE_BYTES},
+	Cols:     []string{"name", "def"},
+	Prefixes: []uint32{2},
+	Indexes:  [][]string{{"name"}},
 }
 
 var INTERNAL_TABLES map[string]*TableDef = map[string]*TableDef{
@@ -227,28 +228,42 @@ func checkRecord(tdef *TableDef, rec Record, n int) ([]Value, error) {
 	return vals, nil
 }
 
+// extract multiple col. values
+func getValues(tdef *TableDef, rec Record, cols []string) ([]Value, error) {
+	vals := make([]Value, len(cols))
+	for i, c := range cols {
+		v := rec.Get(c)
+		if v == nil {
+			return nil, fmt.Errorf("missing col.: %s", tdef.Cols[i])
+		}
+
+		if v.Type != tdef.Types[slices.Index(tdef.Cols, c)] {
+			return nil, fmt.Errorf("bad column type: %s", c)
+		}
+		vals[i] = *v
+	}
+	return vals, nil
+}
+
 // get a single row by primary key
 func dbGet(db *DB, tdef *TableDef, rec *Record) (bool, error) {
-	vals, err := checkRecord(tdef, *rec, tdef.PKeys)
+	vals, err := getValues(tdef, *rec, tdef.Indexes[0])
 	if err != nil {
 		return false, err
 	}
-	// encode primary key
-	key := encodeKey(nil, tdef.Prefix, vals[:tdef.PKeys])
-	// query KV store
-	val, ok := db.kv.Get(key)
-	if !ok {
-		return false, nil
+
+	//scan operation
+	sc := Scanner{
+		Cmp1: CMP_GE,
+		Cmp2: CMP_LE,
+		Key1: Record{tdef.Indexes[0], vals},
+		Key2: Record{tdef.Indexes[0], vals},
 	}
 
-	// decode value into cols
-	for i := tdef.PKeys; i < len(tdef.Cols); i++ {
-		vals[i].Type = tdef.Types[i]
+	if err := dbScan(db, tdef, &sc); err != nil || !sc.Valid() {
+		return false, err
 	}
-
-	decodeValues(val, vals[tdef.PKeys:])
-	rec.Cols = tdef.Cols
-	rec.Vals = vals
+	sc.Deref(rec)
 	return true, nil
 }
 
