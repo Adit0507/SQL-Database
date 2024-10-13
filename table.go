@@ -544,6 +544,21 @@ func (sc *Scanner) Deref(rec *Record) {
 	decodeValues(val, rec.Vals[sc.tdef.PKeys:])
 }
 
+// check col. types
+func checkTypes(tdef *TableDef, rec Record) error {
+	if len(rec.Cols) != len(rec.Vals) {
+		return fmt.Errorf("bad record")
+	}
+
+	for i, c := range rec.Cols {
+		j := slices.Index(tdef.Cols, c)
+		if j < 0 || tdef.Types[j] != rec.Vals[i].Type {
+			return fmt.Errorf("bad column: %s", c)
+		}
+	}
+	return nil
+}
+
 func dbScan(db *DB, tdef *TableDef, req *Scanner) error {
 	switch {
 	case req.Cmp1 > 0 && req.Cmp2 < 0:
@@ -552,21 +567,31 @@ func dbScan(db *DB, tdef *TableDef, req *Scanner) error {
 		return fmt.Errorf("bad range")
 	}
 
+	if !slices.Equal(req.Key1.Cols, req.Key2.Cols) {
+		return fmt.Errorf("bad range key")
+	}
+	if err := checkTypes(tdef, req.Key1); err != nil {
+		return err
+	}
+	if err := checkTypes(tdef, req.Key2); err != nil {
+		return err
+	}
+
+	req.db = db
 	req.tdef = tdef
 
-	// reorder input cols acc. to schema
-	val1, err := checkRecord(tdef, req.Key1, tdef.PKeys)
-	if err != nil {
-		return err
-	}
-	val2, err := checkRecord(tdef, req.Key2, tdef.PKeys)
-	if err != nil {
-		return err
+	// select index
+	isCovered := func(index []string) bool {
+		key := req.Key1.Cols
+		return len(index) >= len(key) && slices.Equal(index[:len(key)], key)
 	}
 
-	// encode primary key
-	keyStart := encodeKey(nil, tdef.Prefix, val1[:tdef.PKeys])
-	req.keyEnd = encodeKey(nil, tdef.Prefix, val2[:tdef.PKeys])
+	req.index = slices.IndexFunc(tdef.Indexes, isCovered)
+
+	// encode start key
+	prefix := tdef.Prefixes[req.index]
+	keyStart := encodeKeyPartial(nil, prefix, req.Key1.Vals, req.Cmp1)
+	req.keyEnd = encodeKeyPartial(nil, prefix, req.Key2.Vals, req.Cmp2)
 
 	// seek to start key
 	req.iter = db.kv.tree.Seek(keyStart, req.Cmp1)
