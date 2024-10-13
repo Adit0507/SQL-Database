@@ -263,10 +263,16 @@ type UpdateReq struct {
 	tree    *BTree
 	Added   bool // new key
 	Updated bool
-	Old     []byte	//value before update
+	Old     []byte //value before update
 	Key     []byte
 	Val     []byte
 	Mode    int
+}
+
+type DeleteReq struct {
+	tree *BTree
+	Key  []byte
+	Old  []byte
 }
 
 // tree insertion- inserts a KV into a node
@@ -371,28 +377,31 @@ func shouldMerge(tree *BTree, node BNode, idx uint16, updated BNode) (int, BNode
 	return 0, BNode{}
 }
 
-func treeDelete(tree *BTree, node BNode, key []byte) BNode {
-	idx := nodeLookupLE(node, key)
+func treeDelete(req *DeleteReq, node BNode) BNode {
+	idx := nodeLookupLE(node, req.Key)
 
 	switch node.btype() {
 	case BNODE_LEAF:
-		if !bytes.Equal(key, node.getKey(idx)) {
+		if !bytes.Equal(req.Key, node.getKey(idx)) {
 			return BNode{} // not found
 		}
 		// delete the key in the leaf
+		req.Old = node.getVal(idx)
 		new := BNode(make([]byte, BTREE_PAGE_SIZE))
 		leafDelete(new, node, idx)
 		return new
 	case BNODE_NODE:
-		return nodeDelete(tree, node, idx, key)
+		return nodeDelete(req, node, idx)
 	default:
 		panic("bad node")
 	}
 }
 
-func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
+func nodeDelete(req *DeleteReq, node BNode, idx uint16) BNode {
+	tree := req.tree
+	
 	kptr := node.getPtr(idx)
-	updated := treeDelete(tree, tree.get(kptr), key)
+	updated := treeDelete(req, tree.get(kptr))
 	if len(updated) == 0 {
 		return BNode{}
 	}
@@ -468,15 +477,17 @@ func (tree *BTree) Update(req *UpdateReq) (bool, error) {
 	return true, nil
 }
 
-func (tree *BTree) Delete(key []byte) (bool, error) {
-	if err := checkLimit(key, nil); err != nil {
+func (tree *BTree) Delete(req *DeleteReq) (bool, error) {
+	if err := checkLimit(req.Key, nil); err != nil {
 		return false, err
 	}
 
 	if tree.root == 0 {
 		return false, nil
 	}
-	updated := treeDelete(tree, tree.get(tree.root), key)
+
+	req.tree = tree
+	updated := treeDelete(req, tree.get(tree.root))
 	if len(updated) == 0 {
 		return false, nil
 	}
