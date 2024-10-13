@@ -303,25 +303,31 @@ func (db *DB) TableNew(tdef *TableDef) error {
 		return fmt.Errorf("table exists: %s", tdef.Name)
 	}
 
-	// alllocate a new prefix
-	assert(tdef.Prefix == 0)
-	tdef.Prefix = TABLE_PREFIX_MIN
+	// alllocating new prefixes
+	prefix := uint32(TABLE_PREFIX_MIN)
 	meta := (&Record{}).AddStr("key", []byte("next_prefix"))
 	ok, err = dbGet(db, TDEF_META, meta)
 	assert(err == nil)
 	if ok {
-		tdef.Prefix = binary.LittleEndian.Uint32(meta.Get("val").Str)
-		assert(tdef.Prefix > TABLE_PREFIX_MIN)
+		prefix = binary.LittleEndian.Uint32(meta.Get("val").Str)
+		assert(prefix > TABLE_PREFIX_MIN)
 	} else {
 		meta.AddStr("val", make([]byte, 4))
 	}
+	assert(len(tdef.Prefixes) == 0)
+	for i := range tdef.Indexes {
+		tdef.Prefixes = append(tdef.Prefixes, prefix+uint32(i))
+	}
 
-	binary.LittleEndian.PutUint32(meta.Get("val").Str, tdef.Prefix+1)
+	// updatin next prefix
+	next := prefix + uint32(len(tdef.Prefixes))
+	binary.LittleEndian.PutUint32(meta.Get("val").Str, next)
 	_, err = dbUpdate(db, TDEF_META, &DBUpdateReq{Record: *meta})
 	if err != nil {
 		return err
 	}
 
+	// storin schema
 	val, err := json.Marshal(tdef)
 	assert(err == nil)
 	table.AddStr("def", val)
