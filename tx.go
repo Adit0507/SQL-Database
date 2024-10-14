@@ -41,3 +41,24 @@ func (kv *KV) Abort(tx *KVTX) {
 	tx.db.page.nappend = 0
 	tx.db.page.updates = map[uint64][]byte{}
 }
+
+// KV interfaces
+func (tx*KVTX) Seek(key []byte, cmp int) *BIter {
+	return tx.db.tree.Seek(key, cmp)
+}
+
+func (tx*KVTX) Update(req *UpdateReq) (bool, error) {
+	return tx.db.tree.Update(req)
+}
+
+func (tx*KVTX) Del(req *DeleteReq) (bool, error) {
+	return tx.db.tree.Delete(req)
+}
+
+func (tx*KVTX) Set(key []byte, val []byte) (bool, error) {
+	return tx.Update(&UpdateReq{Key: key, Val: val})
+}
+
+func (tx*KVTX) Get(key []byte)	([]byte, bool) {
+	return tx.db.tree.Get(key)
+}
