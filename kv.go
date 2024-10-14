@@ -79,18 +79,6 @@ func (db *KV) pageWrite(ptr uint64) []byte {
 	return node
 }
 
-func (db *KV) pageReadFile(ptr uint64) []byte {
-	start := uint64(0)
-	for _, chunk := range db.mmap.chunks {
-		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
-		if ptr < end {
-			offset := BTREE_PAGE_SIZE * (ptr - start)
-			return chunk[offset : offset+BTREE_PAGE_SIZE]
-		}
-		start = end
-	}
-	panic("bad pointer")
-}
 
 // `BTree.new`, allocate a new page.
 func (db *KV) pageAppend(node []byte) uint64 {
