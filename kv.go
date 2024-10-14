@@ -34,6 +34,15 @@ type KV struct {
 
 // `BTree.get`, read a page.
 func (db *KV) pageRead(ptr uint64) []byte {
+	assert(ptr < db.page.flushed + db.page.nappend)
+	if node, ok := db.page.updates[ptr]; ok {
+		return node
+	}
+
+	return db.pageReadFile(ptr)
+}
+
+func (db*KV) pageReadFile(ptr uint64) []byte {
 	start := uint64(0)
 	for _, chunk := range db.mmap.chunks {
 		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
@@ -315,23 +324,6 @@ func writePages(db *KV) error {
 	db.page.nappend = 0
 	db.page.updates = map[uint64][]byte{}
 	return nil
-}
-
-// KV interfaces
-func (db *KV) Get(key []byte) ([]byte, bool) {
-	return db.tree.Get(key)
-}
-func (db *KV) Set(key []byte, val []byte) (bool, error) {
-	return db.Update(&UpdateReq{Key: key, Val: val})
-}
-
-func (db *KV) Update(req *UpdateReq) (bool, error) {
-	meta := saveMeta(db)
-	if updated, err := db.tree.Update(req); !updated {
-		return false, err
-	}
-	err := updateOrRevert(db, meta)
-	return err == nil, err
 }
 
 func (db *KV) Del(req *DeleteReq) (bool, error) {
