@@ -20,6 +20,24 @@ type DB struct {
 	tables map[string]*TableDef
 }
 
+type DBTX struct {
+	kv KVTX
+	db *DB
+}
+
+func (db *DB) Begin(tx *DBTX) {
+	tx.db = db
+	db.kv.Begin(&tx.kv)
+}
+
+func (db *DB) Commit(tx *DBTX) error {
+	return db.kv.Commit(&tx.kv)
+}
+
+func (db *DB) Abort(tx *DBTX) {
+	db.kv.Abort(&tx.kv)
+}
+
 type TableDef struct {
 	Name     string
 	Types    []uint32 //col type
