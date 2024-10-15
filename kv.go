@@ -1,3 +1,6 @@
+//go:build (linux && 386) || (darwin && !cgo)
+// +build linux,386 darwin,!cgo
+
 package main
 
 import (
@@ -32,7 +35,7 @@ type KV struct {
 	failed bool // Did the last update fail?
 
 	// concurrency control
-	mutex sync.Mutex
+	mutex   sync.Mutex
 	version uint64
 	ongoing []uint64
 	history []CommitedTX
@@ -40,12 +43,12 @@ type KV struct {
 
 type CommitedTX struct {
 	version uint64
-	writes []KeyRange
+	writes  []KeyRange
 }
 
 // `BTree.get`, read a page.
 func (db *KV) pageRead(ptr uint64) []byte {
-	assert(ptr < db.page.flushed + db.page.nappend)
+	assert(ptr < db.page.flushed+db.page.nappend)
 	if node, ok := db.page.updates[ptr]; ok {
 		return node
 	}
@@ -84,12 +87,13 @@ func (db *KV) pageWrite(ptr uint64) []byte {
 	}
 
 	node := make([]byte, BTREE_PAGE_SIZE)
-	copy(node, db.pageReadFile(ptr))
+	if !(ptr == 1 && db.page.flushed == 2) {
+		copy(node, mmapRead(ptr, db.mmap.chunks))
+	}
 	db.page.updates[ptr] = node
 
 	return node
 }
-
 
 // `BTree.new`, allocate a new page.
 func (db *KV) pageAppend(node []byte) uint64 {
@@ -105,7 +109,6 @@ func (db *KV) pageAppend(node []byte) uint64 {
 // open or create a file and fsync the directory
 func createFileSync(file string) (int, error) {
 	// obtain the directory fd
-	// +build linux,386 darwin,!cgo
 	flags := os.O_RDONLY | syscall.O_DIRECTORY
 	dirfd, err := syscall.Open(path.Dir(file), flags, 0o644)
 	if err != nil {
@@ -179,7 +182,7 @@ func loadMeta(db *KV, data []byte) {
 	db.free.headPage = binary.LittleEndian.Uint64(data[32:40])
 	db.free.headSeq = binary.LittleEndian.Uint64(data[40:48])
 	db.free.tailPage = binary.LittleEndian.Uint64(data[48:56])
-	db.free.tailSeq  =binary.LittleEndian.Uint64(data[56:64])
+	db.free.tailSeq = binary.LittleEndian.Uint64(data[56:64])
 }
 
 func saveMeta(db *KV) []byte {
@@ -341,5 +344,5 @@ func (db *KV) Close() {
 		err := syscall.Munmap(chunk)
 		assert(err == nil)
 	}
-	_ = syscall.Close(syscall.Handle(db.fd))
+	_ = syscall.Close(db.fd)
 }
