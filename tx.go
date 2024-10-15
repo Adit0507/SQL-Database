@@ -9,6 +9,12 @@ type KVTX struct {
 	done bool
 }
 
+// start <=key <=stop
+type KeyRange struct {
+	start []byte
+	stop []byte
+}
+
 // begin a transaction
 func (kv *KV) Begin(tx *KVTX) {
 	tx.db = kv

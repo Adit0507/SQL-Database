@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
-	"golang.org/x/sys/windows"
 )
 
 type KV struct {
@@ -30,6 +30,17 @@ type KV struct {
 		updates map[uint64][]byte //pending updates
 	}
 	failed bool // Did the last update fail?
+
+	// concurrency control
+	mutex sync.Mutex
+	version uint64
+	ongoing []uint64
+	history []CommitedTX
+}
+
+type CommitedTX struct {
+	version uint64
+	writes []KeyRange
 }
 
 // `BTree.get`, read a page.
@@ -39,12 +50,12 @@ func (db *KV) pageRead(ptr uint64) []byte {
 		return node
 	}
 
-	return db.pageReadFile(ptr)
+	return mmapRead(ptr, db.mmap.chunks)
 }
 
-func (db*KV) pageReadFile(ptr uint64) []byte {
+func mmapRead(ptr uint64, chunks [][]byte) []byte {
 	start := uint64(0)
-	for _, chunk := range db.mmap.chunks {
+	for _, chunk := range chunks {
 		end := start + uint64(len(chunk))/BTREE_PAGE_SIZE
 		if ptr < end {
 			offset := BTREE_PAGE_SIZE * (ptr - start)
@@ -94,6 +105,7 @@ func (db *KV) pageAppend(node []byte) uint64 {
 // open or create a file and fsync the directory
 func createFileSync(file string) (int, error) {
 	// obtain the directory fd
+	// +build linux,386 darwin,!cgo
 	flags := os.O_RDONLY | syscall.O_DIRECTORY
 	dirfd, err := syscall.Open(path.Dir(file), flags, 0o644)
 	if err != nil {
