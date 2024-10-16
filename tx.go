@@ -51,11 +51,59 @@ func (kv *KV) Begin(tx *KVTX) {
 func (kv *KV) Commit(tx *KVTX) error {
 	assert(!tx.done)
 	tx.done = true
-	if kv.tree.root == tx.root{
-		return nil
+	kv.mutex.Lock()
+	defer kv.mutex.Unlock()
+
+	// check conflicts
+	if tx.updateAttempted && detectConflicts(kv, tx) {
+		return ErrorConflict
 	}
 
-	return updateOrRevert(tx.db, tx.meta)
+	// save meta page
+	meta, root := saveMeta(kv), kv.tree.root
+	kv.free.curVer = kv.version + 1 //transfer current updates to current tree
+	writes := []KeyRange(nil)
+	for iter := tx.pending.Seek(nil, CMP_GT); iter.Valid(); iter.Next() {
+		modified := false
+		key, val := iter.Deref()
+		oldVal, isOld := tx.snapshot.Get(key)
+		switch val[0] {
+		case FLAG_DELETED:
+			modified = isOld
+			deleted, err := kv.tree.Delete(&DeleteReq{Key: key})
+			assert(err == nil)          // can only fail by length limit
+			assert(deleted == modified) // assured by conflict detection
+
+		case FLAG_UPDATED:
+			modified = (!isOld || !bytes.Equal(oldVal, val[1:]))
+			updated, err := kv.tree.Update(&UpdateReq{Key: key, Val: val[1:]})
+			assert(err == nil)
+			assert(updated == modified)
+
+		default:
+			panic("unreachable")
+		}
+
+		if modified && len(kv.ongoing) > 1 {
+			writes = append(writes, KeyRange{key, key})
+		}
+	}
+
+	// commitin update
+	if root != kv.tree.root {
+		kv.version++
+		if err := updateOrRevert(kv, meta); err != nil {
+			return err
+		}
+	}
+
+	if len(writes) > 0 {
+		slices.SortFunc(writes, func(r1, r2 KeyRange) int {
+			return bytes.Compare(r1.start, r2.start)
+		})
+		kv.history = append(kv.history, CommittedTX{kv.version, writes})
+	}
+	return nil
 }
 
 // end transaction
@@ -67,6 +115,65 @@ func (kv *KV) Abort(tx *KVTX) {
 	// discard temporaries
 	tx.db.page.nappend = 0
 	tx.db.page.updates = map[uint64][]byte{}
+}
+
+var ErrorConflict = errors.New("cannot commit due to conflict")
+
+func detectConflicts(kv *KV, tx *KVTX) bool {
+	slices.SortFunc(tx.reads, func(r1, r2 KeyRange) int {
+		return bytes.Compare(r1.start, r2.start)
+	})
+
+	for i := len(kv.history) - 1; i >= 0; i-- {
+		if !versionBefore(tx.version, kv.history[i].version) {
+			break
+		}
+		if sortedRangesOverlap(tx.reads, kv.history[i].writes) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func sortedRangesOverlap(s1, s2 []KeyRange) bool {
+	for len(s1) > 0 && len(s2) > 0 {
+		if bytes.Compare(s1[0].stop, s2[0].start) < 0 {
+			s1 = s1[1:]
+		} else if bytes.Compare(s2[0].stop, s1[0].start) < 0 {
+			s2 = s2[1:]
+		} else {
+			return true
+		}
+	}
+
+	return false
+}
+
+// routines when exiting a transacion
+func txFinalize(kv *KV, tx *KVTX) {
+	idx := slices.Index(kv.ongoing, tx.version)
+	last := len(kv.ongoing) - 1
+	kv.ongoing[idx], kv.ongoing = kv.ongoing[last], kv.ongoing[:last]
+
+	// oldest in use version
+	minVer := kv.version
+	for _, other := range kv.ongoing {
+		if versionBefore(other, minVer) {
+			minVer = other
+		}
+	}
+
+	// release free list
+	kv.free.SetMaxVer(minVer)
+
+	for idx = 0; idx < len(kv.history); idx++ {
+		if versionBefore(minVer, kv.history[idx].version) {
+			break
+		}
+	}
+
+	kv.history = kv.history[idx:]
 }
 
 // KV interfaces
