@@ -112,9 +112,9 @@ func (kv *KV) Abort(tx *KVTX) {
 	tx.done = true
 	loadMeta(tx.db, tx.meta)
 
-	// discard temporaries
-	tx.db.page.nappend = 0
-	tx.db.page.updates = map[uint64][]byte{}
+	kv.mutex.Lock()
+	txFinalize(kv, tx)
+	kv.mutex.Unlock()
 }
 
 var ErrorConflict = errors.New("cannot commit due to conflict")
