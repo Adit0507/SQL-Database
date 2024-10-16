@@ -137,6 +137,7 @@ func (db *KV) Open() error {
 		db.Fsync = syscall.Fsync
 	}
 	var err error
+	db.page.updates = map[uint64][]byte{}
 	// B+tree callbacks
 	db.tree.get = db.pageRead
 	db.tree.new = db.pageAlloc
