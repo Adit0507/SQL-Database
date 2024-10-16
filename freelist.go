@@ -56,13 +56,10 @@ func versionBefore(a, b uint64) bool {
 	return a-b > 1<<63
 }
 
+// makin newly added items available for consumption
 func (fl *FreeList) SetMaxVer(maxVer uint64) {
 	fl.maxSeq = fl.tailSeq
 	fl.maxVer = maxVer
-}
-
-func (fl *FreeList) SetMaxSeq() {
-	fl.maxSeq = fl.tailSeq
 }
 
 // get 1 item form list head
