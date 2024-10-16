@@ -3,10 +3,14 @@ package main
 import "runtime"
 
 type KVTX struct {
-	db   *KV
-	meta []byte //for rollback
-	root uint64
-	done bool
+	snapshot BTree // read-only snapshot(copy on wrrite)
+	version  uint64
+	// local updates are held in an memory B+tree
+	pending BTree      //captured KV updates
+	reads   []KeyRange //list of involved interval of keys for dtecting conflicts
+	// cheks for conflict even if update changes nothing
+	updateAttempted bool
+	done            bool
 }
 
 // start <=key <=stop
@@ -15,15 +19,32 @@ type KeyRange struct {
 	stop []byte
 }
 
+const (
+	FLAG_DELETED = byte(1)
+	FLAG_UPDATED = byte(2)
+)
+
 // begin a transaction
 func (kv *KV) Begin(tx *KVTX) {
-	tx.db = kv
-	tx.meta = saveMeta(tx.db)
-	tx.root = tx.db.tree.root
-	assert(kv.page.nappend == 0 && len(kv.page.updates) == 0)
-	runtime.SetFinalizer(tx, func(x *KVTX) {
-		assert(tx.done)
-	})
+	kv.mutex.Lock()
+	defer kv.mutex.Unlock()
+
+	tx.snapshot.root = kv.tree.root
+	chunks := kv.mmap.chunks
+	tx.snapshot.get = func(ptr uint64) []byte { return mmapRead(ptr, chunks) }
+	tx.version = kv.version
+
+	// in memeory tree to caputre updaets
+	pages := [][]byte(nil)
+	tx.pending.get = func(ptr uint64) []byte { return pages[ptr-1] }
+	tx.pending.new = func(b []byte) uint64 {
+		pages = append(pages, b)
+		return uint64(len(pages))
+	}
+	tx.pending.del = func(uint64) {}
+	// keepin track of concurrent TXs
+	kv.ongoing = append(kv.ongoing, tx.version)
+	runtime.SetFinalizer(tx, func(tx *KVTX) { assert(tx.done) })
 }
 
 // rollback on error
