@@ -1,6 +1,11 @@
 package main
 
-import "runtime"
+import (
+	"bytes"
+	"errors"
+	"runtime"
+	"slices"
+)
 
 type KVTX struct {
 	snapshot BTree // read-only snapshot(copy on wrrite)
@@ -16,7 +21,7 @@ type KVTX struct {
 // start <=key <=stop
 type KeyRange struct {
 	start []byte
-	stop []byte
+	stop  []byte
 }
 
 const (
@@ -110,7 +115,6 @@ func (kv *KV) Commit(tx *KVTX) error {
 func (kv *KV) Abort(tx *KVTX) {
 	assert(!tx.done)
 	tx.done = true
-	loadMeta(tx.db, tx.meta)
 
 	kv.mutex.Lock()
 	txFinalize(kv, tx)
@@ -177,22 +181,169 @@ func txFinalize(kv *KV, tx *KVTX) {
 }
 
 // KV interfaces
-func (tx*KVTX) Seek(key []byte, cmp int) *BIter {
-	return tx.db.tree.Seek(key, cmp)
+type KVIter interface {
+	Deref() (key []byte, val []byte)
+	Valid() bool
+	Next()
 }
 
-func (tx*KVTX) Update(req *UpdateReq) (bool, error) {
-	return tx.db.tree.Update(req)
+// combines pending updates and the snapshot
+type CombinedIterator struct {
+	top *BIter //kvtx pending
+	bot *BIter //kvtx snapshot
+	dir int    //+1 for greater or greater than, -1 for less or less than
+
+	//end of range
+	cmp int
+	end []byte
 }
 
-func (tx*KVTX) Del(req *DeleteReq) (bool, error) {
-	return tx.db.tree.Delete(req)
+func (iter *CombinedIterator) Deref() ([]byte, []byte) {
+	var k1, k2, v1, v2 []byte
+	top, bot := iter.top.Valid(), iter.bot.Valid()
+	assert(top || bot)
+	if top {
+		k1, v1 = iter.top.Deref()
+	}
+	if bot {
+		k2, v2 = iter.bot.Deref()
+	}
+
+	// usin min/max key of the two
+	if top && bot && bytes.Compare(k1, k2) == +iter.dir {
+		return k2, v2
+	}
+	if top {
+		return k1, v1[1:]
+	} else {
+		return k2, v2
+	}
 }
 
-func (tx*KVTX) Set(key []byte, val []byte) (bool, error) {
+func (iter *CombinedIterator) Valid() bool {
+	if iter.top.Valid() || iter.bot.Valid() {
+		key, _ := iter.Deref()
+		return cmpOk(key, iter.cmp, iter.end)
+	}
+
+	return false
+}
+
+func (iter *CombinedIterator) Next() {
+	top, bot := iter.top.Valid(), iter.bot.Valid()
+	if top && bot {
+		k1, _ := iter.top.Deref()
+		k2, _ := iter.bot.Deref()
+
+		switch bytes.Compare(k1, k2) {
+		case -iter.dir:
+			top, bot = true, false
+		case +iter.dir:
+			top, bot = false, true
+		case 0: // equal; move both
+		}
+	}
+
+	assert(top || bot)
+	if top {
+		if iter.dir > 0 {
+			iter.top.Next()
+		} else {
+			iter.top.Prev()
+		}
+	}
+
+	if bot {
+		if iter.dir > 0 {
+			iter.bot.Next()
+		} else {
+			iter.bot.Prev()
+		}
+	}
+
+}
+
+func cmp2Dir(cmp int) int {
+	if cmp > 0 {
+		return +1
+	} else {
+		return -1
+	}
+}
+
+// range query combines captured updates with snapshots
+func (tx *KVTX) Seek(key1 []byte, cmp1 int, key2 []byte, cmp2 int) KVIter {
+	assert(cmp2Dir(cmp1) != cmp2Dir(cmp2))
+	lo, hi := key1, key2
+	if cmp2Dir(cmp1) < 0 {
+		lo, hi = hi, lo
+	}
+	tx.reads = append(tx.reads, KeyRange{lo, hi})
+
+	return &CombinedIterator{
+		top: tx.pending.Seek(key1, cmp1),
+		bot: tx.pending.Seek(key1, cmp1),
+		dir: cmp2Dir(cmp1),
+		cmp: cmp2,
+		end: key2,
+	}
+}
+
+func (tx *KVTX) Update(req *UpdateReq) (bool, error) {
+	tx.updateAttempted = true
+
+	old, exists := tx.Get(req.Key)
+	if req.Mode == MODE_UPDATE_ONLY && !exists {
+		return false, nil
+	}
+	if req.Mode == MODE_INSERT_ONLY && exists {
+		return false, nil
+	}
+	if exists && bytes.Equal(old, req.Val) {
+		return false, nil
+	}
+
+	flaggedVal := append([]byte{FLAG_UPDATED}, req.Val...)
+	_, err := tx.pending.Update(&UpdateReq{Key: req.Key, Val: flaggedVal})
+	if err != nil {
+		return false, err
+	}
+
+	req.Added = !exists
+	req.Updated  =true
+	req.Old = old
+
+	return true, nil
+}
+
+func (tx *KVTX) Del(req *DeleteReq) (bool, error) {
+	tx.updateAttempted = true
+	exists := false
+	if req.Old, exists = tx.Get(req.Key); !exists {
+		return false, nil
+	}
+
+	return tx.pending.Update(&UpdateReq{Key: req.Key, Val: []byte{FLAG_DELETED}})
+}
+
+func (tx *KVTX) Set(key []byte, val []byte) (bool, error) {
 	return tx.Update(&UpdateReq{Key: key, Val: val})
 }
 
-func (tx*KVTX) Get(key []byte)	([]byte, bool) {
-	return tx.db.tree.Get(key)
+// point query combines captured updates with snapshots
+func (tx *KVTX) Get(key []byte) ([]byte, bool) {
+	tx.reads = append(tx.reads, KeyRange{key, key})
+	val, ok := tx.pending.Get(key)
+
+	switch {
+	case ok && val[0] == FLAG_UPDATED: //updated in this tx
+		return val[1:], true
+	case ok && val[0] == FLAG_DELETED: //deleted in this TX
+		return nil, false
+	case !ok:
+		return tx.snapshot.Get(key)
+
+	default:
+		panic("unreachable")
+	}
 }
