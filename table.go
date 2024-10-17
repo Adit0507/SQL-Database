@@ -6,17 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync"
 )
 
 const (
 	TYPE_ERROR = 0
 	TYPE_BYTES = 1
 	TYPE_INT64 = 2
+	TYPE_INF   = 0xff
 )
 
 type DB struct {
 	Path   string
 	kv     KV
+	mu     sync.Mutex
 	tables map[string]*TableDef
 }
 
@@ -597,28 +600,18 @@ type Scanner struct {
 	tx     *DBTX
 	index  int
 	tdef   *TableDef
-	iter   *BIter
+	iter   KVIter
 	keyEnd []byte
 }
 
 // within range or not
 func (sc *Scanner) Valid() bool {
-	if !sc.iter.Valid() {
-		return false
-	}
-
-	key, _ := sc.iter.Deref()
-	return cmpOk(key, sc.Cmp2, sc.keyEnd)
+	return sc.iter.Valid()
 }
 
 // movin underlying B+ tree iterator
 func (sc *Scanner) Next() {
-	assert(sc.Valid())
-	if sc.Cmp1 > 0 {
-		sc.iter.Next()
-	} else {
-		sc.iter.Prev()
-	}
+	sc.iter.Next()
 }
 
 // return current row
@@ -707,14 +700,17 @@ func dbScan(tx *DBTX, tdef *TableDef, req *Scanner) error {
 	}
 
 	req.index = slices.IndexFunc(tdef.Indexes, isCovered)
+	if req.index < 0 {
+		return fmt.Errorf("no index")
+	}
 
 	// encode start key
 	prefix := tdef.Prefixes[req.index]
 	keyStart := encodeKeyPartial(nil, prefix, req.Key1.Vals, req.Cmp1)
-	req.keyEnd = encodeKeyPartial(nil, prefix, req.Key2.Vals, req.Cmp2)
+	keyEnd := encodeKeyPartial(nil, prefix, req.Key2.Vals, req.Cmp2)
 
 	// seek to start key
-	req.iter = tx.kv.Seek(keyStart, req.Cmp1)
+	req.iter = tx.kv.Seek(keyStart, req.Cmp1, keyEnd, req.Cmp2)
 	return nil
 }
 
