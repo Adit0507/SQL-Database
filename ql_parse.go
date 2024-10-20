@@ -562,6 +562,8 @@ func pStmt(p *Parser) (r interface{}) {
 		r = pInsert(p, MODE_UPDATE_ONLY)
 	case pKeyword(p, "upsert", "into"):
 		r = pInsert(p, MODE_UPSERT)
+	case pKeyword(p, "update"):
+		r = pUpdate(p)
 	default:
 		pErr(p, "unknown stmt")
 	}
@@ -571,6 +573,27 @@ func pStmt(p *Parser) (r interface{}) {
 	}
 
 	return r
+}
+
+func pUpdate(p *Parser) *QLUPdate {
+	stmt := QLUPdate{}
+	stmt.Table = pMustSym(p)
+
+	pExpect(p, "set", "expect `SET`")
+	pAssign(p, &stmt)
+	for pKeyword(p, ",") {
+		pAssign(p, &stmt)
+	}
+
+	pScan(p, &stmt.QLScan)
+	return &stmt
+}
+
+func pAssign(p *Parser, stmt *QLUPdate) {
+	stmt.Names = append(stmt.Names, pMustSym(p))
+	pExpect(p, "=", "expect `=`")
+	stmt.Values = append(stmt.Values, QLNODE{})
+	pExprOr(p, &stmt.Values[len(stmt.Values) - 1])
 }
 
 func pInsert(p *Parser, mode int) *QLInsert {
