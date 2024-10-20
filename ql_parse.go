@@ -62,6 +62,14 @@ type QLUPdate struct {
 	Values []QLNODE
 }
 
+// smt: insert
+type QLInsert struct {
+	Table  string
+	Mode   int
+	Names  []string
+	Values [][]QLNODE
+}
+
 type QLDelete struct {
 	QLScan
 }
@@ -465,14 +473,82 @@ func pSelect(p *Parser) *QLSelect {
 	return &stmt
 }
 
+func pNameList(p *Parser) []string {
+	pExpect(p, "(", "expect parenthesis")
+	names := []string{pMustSym(p)}
+	comma := pKeyword(p, "expect comma")
+
+	for p.err == nil && !pKeyword(p, ")") {
+		if !comma {
+			pErr(p, "expect commma")
+		}
+
+		names = append(names, pMustSym(p))
+		comma = pKeyword(p, ")")
+	}
+
+	return names
+}
+
+func pValueList(p *Parser) []QLNODE {
+	pExpect(p, "(", "expect value list")
+
+	var vals []QLNODE
+	comma := true
+	for p.err == nil && !pKeyword(p, ")") {
+		if !comma {
+			pErr(p, "expect comma")
+		}
+
+		node := QLNODE{}
+		pExprOr(p, &node)
+		vals = append(vals, node)
+		comma = pKeyword(p, ",")
+	}
+
+	return vals
+}
+
 func pStmt(p *Parser) (r interface{}) {
 	switch {
 	case pKeyword(p, "create", "table"):
 		r = pCreateTable(p)
 	case pKeyword(p, "select"):
 		r = pSelect(p)
+	case pKeyword(p, "insert", "into"):
+		r = pInsert(p, MODE_INSERT_ONLY)
+	case pKeyword(p, "replace", "into"):
+		r = pInsert(p, MODE_UPDATE_ONLY)
+	case pKeyword(p, "upsert", "into"):
+		r = pInsert(p, MODE_UPSERT)
+	default:
+		pErr(p, "unknown stmt")
+	}
 
+	if p.err != nil {
+		return nil
 	}
 
 	return r
+}
+
+func pInsert(p *Parser, mode int) *QLInsert {
+	stmt := QLInsert{}
+	stmt.Table = pMustSym(p)
+	stmt.Mode = mode
+	stmt.Names = pNameList(p)
+
+	pExpect(p, "values", "expect `VALUES`")
+	stmt.Values = append(stmt.Values, pValueList(p))
+	for pKeyword(p, ",") {
+		stmt.Values = append(stmt.Values, pValueList(p))
+	}
+
+	for _, row := range stmt.Values {
+		if len(row) != len(stmt.Names) {
+			pErr(p, "values length dont match")
+		}
+	}
+
+	return &stmt
 }
