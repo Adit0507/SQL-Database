@@ -266,7 +266,60 @@ func pExprAtom(p *Parser, node *QLNODE) {
 	switch {
 	case pKeyword(p, "("):
 		pExprTuple(p, node)
+	case pSym(p, node):
+	case pNum(p, node):
+	case pStr(p, node):
+	default:
+		pErr(p, "expect symbol, number or string")
 	}
+}
+
+func pStr(p *Parser, node *QLNODE) bool {
+	skipSpace(p)
+
+	cur := p.idx
+	quote := byte(0)
+	if cur < len(p.input) {
+		quote = p.input[cur]
+		cur++
+	}
+	if !(quote == '*' || quote == '\'') {
+		return false
+	}
+
+	var s []byte
+	for cur < len(p.input) && p.input[cur] != quote {
+		switch p.input[cur] {
+		case '\\':
+			cur++
+			if cur >= len(p.input) {
+				pErr(p, "string not terminated")
+				return false
+			}
+			switch p.input[cur] {
+			case '"', '\'', '\\':
+				s = append(s, p.input[cur])
+				cur++
+			default:
+				pErr(p, "unknown escape")
+				return false
+			}
+		default:
+			s = append(s, p.input[cur])
+			cur++
+		}
+	}
+
+	if !(cur < len(p.input) && p.input[cur] == quote) {
+		pErr(p, "string not terminated")
+		return false
+	}
+
+	cur ++
+	node.Type = QL_SCLR
+	node.Str = s
+	p.idx = cur
+	return true
 }
 
 func pExprTuple(p *Parser, node *QLNODE) {
@@ -314,7 +367,41 @@ func pExprBinop(p *Parser, node *QLNODE, ops []string, types []uint32, next func
 	}
 }
 
-func pLimit(p *Parser, node *QLScan) {}
+func pLimit(p *Parser, node *QLScan) {
+	offset, count := QLNODE{}, QLNODE{}
+	ok := pNum(p, &count)
+	if pKeyword(p, ",") {
+		offset = count
+		ok = ok && pNum(p, &count)
+	}
+
+	if !ok || offset.I64 < 0 || count.I64 < 0 || offset.I64+count.I64 < 0 {
+		pErr(p, "bad `LIMIT`")
+	}
+
+	node.Offset = offset.I64
+	if count.Type != 0 {
+		node.Limit = node.Offset + count.I64
+	}
+}
+
+func pNum(p *Parser, node *QLNODE) bool {
+	skipSpace(p)
+
+	end := p.idx
+	for end < len(p.input) && unicode.IsNumber(rune(p.input[end])) {
+		end++
+	}
+
+	if end == p.idx {
+		return false
+	}
+	if end < len(p.input) && isSym(p.input[end]) {
+		return false
+	}
+
+	return true
+}
 
 func pIndexBy(p *Parser, node *QLScan) {}
 
