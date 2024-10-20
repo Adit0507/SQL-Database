@@ -10,8 +10,8 @@ import (
 const (
 	// syntax tree node types
 	QL_UNINIT = 0
-	QL_SCLR = TYPE_BYTES
-	QL_I64 = TYPE_INT64
+	QL_SCLR   = TYPE_BYTES
+	QL_I64    = TYPE_INT64
 	QL_CMP_GE = 10 // >=
 	QL_CMP_GT = 11 // >
 	QL_CMP_LT = 12 // <
@@ -25,10 +25,12 @@ const (
 	QL_MOD    = 24
 	QL_AND    = 30
 	QL_OR     = 31
-	QL_NOT = 50
-	QL_NEG = 51
-	QL_SYM = 100
-	QL_STAR = 102
+	QL_NOT    = 50
+	QL_NEG    = 51
+	QL_SYM    = 100
+	QL_TUP    = 101 // tuple
+	QL_STAR   = 102 // select *
+	QL_ERR    = 200 // error; from parsing or evaluation
 )
 
 // tree node
@@ -190,13 +192,13 @@ func pSelectExprList(p *Parser, node *QLSelect) {
 	}
 }
 
-func pExpect(p*Parser, tok string, format string, args ...interface{}) {
+func pExpect(p *Parser, tok string, format string, args ...interface{}) {
 	if !pKeyword(p, tok) {
 		pErr(p, format, args...)
 	}
 }
 
-func pScan(p *Parser, node *QLScan){
+func pScan(p *Parser, node *QLScan) {
 	// INDEX BY
 	if pKeyword(p, "index", "by") {
 		pIndexBy(p, node)
@@ -212,9 +214,107 @@ func pScan(p *Parser, node *QLScan){
 	}
 }
 
-func pExprOr(p *Parser, node *QLNODE) {}
+func pExprOr(p *Parser, node *QLNODE) {
+	pExprBinop(p, node, []string{"or"}, []uint32{QL_OR}, pExprAnd)
+}
 
-func pLimit(p *Parser, node *QLScan){}
+func pExprAnd(p *Parser, node *QLNODE) {
+	pExprBinop(p, node, []string{"and"}, []uint32{QL_ADD}, pExprNot)
+}
+
+func pExprNot(p *Parser, node *QLNODE) {
+	switch {
+	case pKeyword(p, "not"):
+		node.Type = QL_NOT
+		node.Kids = []QLNODE{{}}
+		pExprCmp(p, &node.Kids[0])
+	}
+}
+
+func pExprCmp(p *Parser, node *QLNODE) {
+	pExprBinop(p, node, []string{
+		"=", "!=",
+		">=", "<=", ">", "<",
+	},
+		[]uint32{
+			QL_CMP_EQ, QL_CMP_NE, QL_CMP_GE, QL_CMP_LE, QL_CMP_GT, QL_CMP_LT,
+		},
+		pExprAdd)
+}
+
+func pExprAdd(p *Parser, node *QLNODE) {
+	pExprBinop(p, node, []string{"+", "-"}, []uint32{QL_ADD, QL_SUB}, pExprMul)
+}
+
+func pExprMul(p *Parser, node *QLNODE) {
+	pExprBinop(p, node, []string{"*", "/", "%"}, []uint32{QL_MUL, QL_DIV, QL_MOD}, pExprUnop)
+}
+
+func pExprUnop(p *Parser, node *QLNODE) {
+	switch {
+	case pKeyword(p, "-"):
+		node.Type = QL_NEG
+		node.Kids = []QLNODE{{}}
+		pExprAtom(p, &node.Kids[0])
+
+	default:
+		pExprAtom(p, node)
+	}
+}
+
+func pExprAtom(p *Parser, node *QLNODE) {
+	switch {
+	case pKeyword(p, "("):
+		pExprTuple(p, node)
+	}
+}
+
+func pExprTuple(p *Parser, node *QLNODE) {
+	kids := []QLNODE{}
+	comma := true
+
+	for p.err == nil && !pKeyword(p, ")") {
+		if !comma {
+			pErr(p, "expect comma")
+		}
+
+		kids = append(kids, QLNODE{})
+		pExprOr(p, &kids[len(kids)-1])
+		comma = pKeyword(p, ",")
+	}
+
+	if len(kids) == 1 && !comma {
+		node = &kids[0]
+	} else {
+		node.Type = QL_TUP
+		node.Kids = kids
+	}
+}
+
+func pExprBinop(p *Parser, node *QLNODE, ops []string, types []uint32, next func(*Parser, *QLNODE)) {
+	assert(len(ops) == len(types))
+	left := QLNODE{}
+	next(p, &left)
+
+	for {
+		i := 0
+		for i < len(ops) && !pKeyword(p, ops[i]) {
+			i++
+		}
+
+		if i >= len(ops) {
+			*node = left
+			return
+		}
+
+		new := QLNODE{Value: Value{Type: types[i]}}
+		new.Kids = []QLNODE{left, {}}
+		next(p, &new.Kids[1])
+		left = new
+	}
+}
+
+func pLimit(p *Parser, node *QLScan) {}
 
 func pIndexBy(p *Parser, node *QLScan) {}
 
