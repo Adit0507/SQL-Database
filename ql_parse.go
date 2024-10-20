@@ -10,7 +10,7 @@ import (
 const (
 	// syntax tree node types
 	QL_UNINIT = 0
-	QL_SCLR   = TYPE_BYTES
+	QL_STR   = TYPE_BYTES
 	QL_I64    = TYPE_INT64
 	QL_CMP_GE = 10 // >=
 	QL_CMP_GT = 11 // >
@@ -365,7 +365,7 @@ func pStr(p *Parser, node *QLNODE) bool {
 	}
 
 	cur++
-	node.Type = QL_SCLR
+	node.Type = QL_STR
 	node.Str = s
 	p.idx = cur
 	return true
