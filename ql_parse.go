@@ -8,6 +8,25 @@ import (
 )
 
 const (
+	// syntax tree node types
+	QL_UNINIT = 0
+	QL_SCLR = TYPE_BYTES
+	QL_I64 = TYPE_INT64
+	QL_CMP_GE = 10 // >=
+	QL_CMP_GT = 11 // >
+	QL_CMP_LT = 12 // <
+	QL_CMP_LE = 13 // <=
+	QL_CMP_EQ = 14 // ==
+	QL_CMP_NE = 15 // !=
+	QL_ADD    = 20
+	QL_SUB    = 21
+	QL_MUL    = 22
+	QL_DIV    = 23
+	QL_MOD    = 24
+	QL_AND    = 30
+	QL_OR     = 31
+	QL_NOT = 50
+	QL_NEG = 51
 	QL_SYM = 100
 	QL_STAR = 102
 )
