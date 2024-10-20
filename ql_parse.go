@@ -180,9 +180,50 @@ func pMustSym(p *Parser) string {
 func pCreateTable(p *Parser) *QLCreateTable {
 	stmt := QLCreateTable{}
 	stmt.Def.Name = pMustSym(p)
+	pExpect(p, "(", "expect parenthesis")
+
+	// primary key
+	stmt.Def.Indexes = append(stmt.Def.Indexes, nil)
+	comma := true
+
+	for p.err == nil && !pKeyword(p, ")") {
+		if !comma {
+			pErr(p, "expect comma")
+		}
+
+		switch {
+		case pKeyword(p, "index"):
+			stmt.Def.Indexes = append(stmt.Def.Indexes, pNameList(p))
+		case pKeyword(p, "primary", "key"):
+			if stmt.Def.Indexes[0] != nil {
+				pErr(p, "duplicate primary key")
+			}
+			stmt.Def.Indexes[0] = pNameList(p)
+
+		default:
+			stmt.Def.Cols = append(stmt.Def.Cols, pMustSym(p))
+			stmt.Def.Types = append(stmt.Def.Types, pColType(p))
+		}
+		comma = pKeyword(p, ",")
+	}
 
 	return &stmt
 }
+
+func pColType(p *Parser) uint32 {
+	typedef := pMustSym(p)
+
+	switch strings.ToLower(typedef) {
+	case "strings", "bytes":
+		return TYPE_BYTES
+	case "int", "int64":
+		return TYPE_INT64
+	default:
+		pErr(p, "bad column type: %s", typedef)
+		return 0
+	}
+}
+
 
 func pSelectExpr(p *Parser, node *QLSelect) {
 	if pKeyword(p, "*") {
