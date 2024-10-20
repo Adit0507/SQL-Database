@@ -564,6 +564,9 @@ func pStmt(p *Parser) (r interface{}) {
 		r = pInsert(p, MODE_UPSERT)
 	case pKeyword(p, "update"):
 		r = pUpdate(p)
+	case pKeyword(p, "delete", "from"):
+		r = pDelete(p)
+
 	default:
 		pErr(p, "unknown stmt")
 	}
@@ -573,6 +576,14 @@ func pStmt(p *Parser) (r interface{}) {
 	}
 
 	return r
+}
+
+func pDelete(p *Parser) *QLDelete {
+	stmt := QLDelete{}
+	stmt.Table = pMustSym(p)
+	pScan(p, &stmt.QLScan)
+
+	return &stmt
 }
 
 func pUpdate(p *Parser) *QLUPdate {
