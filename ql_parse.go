@@ -315,7 +315,7 @@ func pStr(p *Parser, node *QLNODE) bool {
 		return false
 	}
 
-	cur ++
+	cur++
 	node.Type = QL_SCLR
 	node.Str = s
 	p.idx = cur
@@ -403,7 +403,56 @@ func pNum(p *Parser, node *QLNODE) bool {
 	return true
 }
 
-func pIndexBy(p *Parser, node *QLScan) {}
+// INDEX BY cols<vals & cols >vals
+func pIndexBy(p *Parser, node *QLScan) {
+	index := QLNODE{}
+	pExprAnd(p, &index)
+
+	if index.Type == QL_AND {
+		node.Key1, node.Key2 = index.Kids[0], index.Kids[1]
+	} else {
+		node.Key1 = index
+	}
+
+	pVerifyScanKey(p, &node.Key1)
+	if node.Key2.Type != 0 {
+		pVerifyScanKey(p, &node.Key2)
+	}
+
+	if node.Key1.Type == QL_CMP_EQ && node.Key2.Type != 0 {
+		pErr(p, "bad `INDEX BY`: expect only a single `=`")
+	}
+}
+
+func pVerifyScanKey(p *Parser, node *QLNODE) {
+	switch node.Type {
+	case QL_CMP_EQ, QL_CMP_GE, QL_CMP_GT, QL_CMP_LT, QL_CMP_LE:
+	default:
+		pErr(p, "bad `INDEX BY`: not a comparision")
+		return
+	}
+
+	l, r := node.Kids[0], node.Kids[1]
+	if l.Type != QL_TUP && r.Type != QL_TUP {
+		l = QLNODE{Value: Value{Type: QL_TUP}, Kids: []QLNODE{l}}
+		r = QLNODE{Value: Value{Type: QL_TUP}, Kids: []QLNODE{r}}
+	}
+
+	if l.Type != QL_TUP || r.Type != QL_TUP {
+		pErr(p, "bad `INDEX BY`: bad comparison")
+	}
+
+	if len(l.Kids) != len(r.Kids) {
+		pErr(p, "bad `INDEX BY`: bad comparison")
+	}
+
+	for _, name := range l.Kids {
+		if name.Type != QL_SYM {
+			pErr(p, "bad `INDEX BY`: expect column name")
+		}
+	}
+	node.Kids[0], node.Kids[1] = l, r
+}
 
 func pSelect(p *Parser) *QLSelect {
 	stmt := QLSelect{}
