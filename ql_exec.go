@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"fmt"
+	"slices"
 )
 
 // evaluating expressions
@@ -71,6 +72,50 @@ func qlEval(ctx *QLEvalContext, node QLNODE) {
 	}
 }
 
+func qlBinopI64(ctx *QLEvalContext, op uint32, a1 int64, a2 int64) int64 {
+	switch op {
+	case QL_ADD:
+		return a1 + a2
+	case QL_SUB:
+		return a1 - a2
+	case QL_MUL:
+		return a1 * a2
+	case QL_DIV:
+		if a2 == 0 {
+			qlErr(ctx, "div. by zero")
+			return 0
+		}
+		return a1 / a2
+
+	case QL_MOD:
+		if a2 == 0 {
+			qlErr(ctx, "div. by zero")
+			return 0
+		}
+
+		return a1 % a2
+
+	case QL_AND:
+		return b2i(a1&a2 != 0)
+	case QL_OR:
+		return b2i(a1|a2 != 0)
+
+	default:
+		qlErr(ctx, "bad i64 binop")
+		return 0
+	}
+}
+
+func qlBinopStr(ctx *QLEvalContext, op uint32, a1 []byte, a2 []byte) {
+	switch op {
+	case QL_ADD:
+		ctx.out.Type =TYPE_BYTES
+		ctx.out.Str = slices.Concat(a1, a2)
+	default:
+		qlErr(ctx, "bad str binop")
+	}
+}
+
 // binary operators
 func qlBinop(ctx *QLEvalContext, node QLNODE) {
 	isCmp := false
@@ -86,6 +131,39 @@ func qlBinop(ctx *QLEvalContext, node QLNODE) {
 		ctx.out.I64 = b2i(cmp2bool(r, node.Type))
 		return
 	}
+
+	// subexpressions
+	qlEval(ctx, node.Kids[0])
+	a1 := ctx.out
+	qlEval(ctx, node.Kids[1])
+	a2 := ctx.out
+
+	// scalar comparision
+	if isCmp {
+		r := qlValueCmp(ctx, a1, a2)
+		ctx.out.Type = QL_I64
+		ctx.out.I64 = b2i(cmp2bool(r, node.Type))
+		return
+	}
+
+	switch {
+	case ctx.err != nil:
+		return
+	case a1.Type == TYPE_INT64:
+		ctx.out.Type = QL_I64
+		ctx.out.I64 = qlBinopI64(ctx, node.Type, a1.I64, a2.I64)
+	
+	case a1.Type != a2.Type:
+		qlErr(ctx, "binop type mismatch")
+
+	case a1.Type == TYPE_BYTES:
+		ctx.out.Type = QL_STR
+		qlBinopStr(ctx, node.Type, a1.Str, a2.Str)
+
+	default:
+		panic("unreachable")
+	}
+
 }
 
 func cmp2bool(res int, cmd uint32) bool {
@@ -102,7 +180,7 @@ func cmp2bool(res int, cmd uint32) bool {
 		return res == 0
 	case QL_CMP_NE:
 		return res != 0
-	
+
 	default:
 		panic("unreachable")
 	}
