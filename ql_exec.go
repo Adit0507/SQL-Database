@@ -327,3 +327,25 @@ type qlSelectIter struct {
 	exprs []QLNODE
 }
 
+func (iter *qlSelectIter) Valid() bool {
+	return iter.iter.Valid()
+}
+
+func (iter *qlSelectIter) Next() {
+	iter.iter.Next()
+}
+
+func (iter *qlSelectIter) Deref(rec *Record) error {
+	if err := iter.iter.Deref(rec); err != nil {
+		return err
+	}
+
+	vals, err := qlEvelMulti(*rec, iter.exprs)
+	if err != nil {
+		return err
+	}
+
+	*rec = Record{iter.names, vals}
+
+	return nil
+}
