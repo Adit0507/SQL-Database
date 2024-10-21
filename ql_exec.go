@@ -109,7 +109,7 @@ func qlBinopI64(ctx *QLEvalContext, op uint32, a1 int64, a2 int64) int64 {
 func qlBinopStr(ctx *QLEvalContext, op uint32, a1 []byte, a2 []byte) {
 	switch op {
 	case QL_ADD:
-		ctx.out.Type =TYPE_BYTES
+		ctx.out.Type = TYPE_BYTES
 		ctx.out.Str = slices.Concat(a1, a2)
 	default:
 		qlErr(ctx, "bad str binop")
@@ -152,7 +152,7 @@ func qlBinop(ctx *QLEvalContext, node QLNODE) {
 	case a1.Type == TYPE_INT64:
 		ctx.out.Type = QL_I64
 		ctx.out.I64 = qlBinopI64(ctx, node.Type, a1.I64, a2.I64)
-	
+
 	case a1.Type != a2.Type:
 		qlErr(ctx, "binop type mismatch")
 
@@ -223,4 +223,93 @@ func qlTupleCmp(ctx *QLEvalContext, n1 QLNODE, n2 QLNODE) int {
 	}
 
 	return 0
+}
+
+func qlEvelMulti(env Record, exprs []QLNODE) ([]Value, error) {
+	vals := []Value{}
+
+	for _, node := range exprs {
+		ctx := QLEvalContext{env: env}
+		qlEval(&ctx, node)
+
+		if ctx.err != nil {
+			return nil, ctx.err
+		}
+		vals = append(vals, ctx.out)
+	}
+
+	return vals, nil
+}
+
+func qlEvalScanKey(node QLNODE) (Record, int, error) {
+	cmp := 0
+
+	switch node.Type {
+	case QL_CMP_GE:
+		cmp = CMP_GE
+	case QL_CMP_GT:
+		cmp = CMP_GT
+	case QL_CMP_LT:
+		cmp = CMP_LT
+	case QL_CMP_LE:
+		cmp = CMP_LE
+	case QL_CMP_EQ:
+		cmp = 0
+
+	default:
+		panic("unreachable")
+	}
+
+	names, exprs := node.Kids[0], node.Kids[1]
+	assert(names.Type == QL_TUP && exprs.Type == QL_TUP)
+	assert(len(names.Kids) == len(exprs.Kids))
+
+	vals, err := qlEvelMulti(Record{}, exprs.Kids)
+	if err != nil {
+		return Record{}, 0, err
+	}
+
+	cols := []string{}
+	for i := range names.Kids {
+		assert(names.Kids[i].Type == QL_SYM)
+		cols = append(cols, string(names.Kids[i].Str))
+	}
+
+	return Record{cols, vals}, cmp, nil
+}
+
+// scanner implements INDEX BY
+func qlScanInit(req *QLScan, sc *Scanner) (err error) {
+	// convert QLNODE to Record
+	if sc.Key1, sc.Cmp1, err = qlEvalScanKey(req.Key1); err != nil {
+		return err
+	}
+	if sc.Key2, sc.Cmp2, err = qlEvalScanKey(req.Key2); err != nil {
+		return err
+	}
+
+	// convert keys to range
+	switch {
+	case req.Key1.Type == 0 && req.Key2.Type == 0:
+		sc.Cmp1, sc.Cmp2 = CMP_GE, CMP_LE //full table scan by primary key
+
+	case req.Key1.Type == QL_CMP_EQ && req.Key2.Type == 0:
+		// INDEX BY key= val
+		sc.Key2 = sc.Key1
+		sc.Cmp1, sc.Cmp2 = CMP_GE, CMP_LE
+
+	case req.Key1.Type != 0 && req.Key2.Type == 0: //open ended range
+		if sc.Cmp1 > 0 {
+			sc.Cmp2 = CMP_LE
+		} else {
+			sc.Cmp2 = CMP_GE
+		}
+
+	case req.Key1.Type != 0 && req.Key2.Type != 0:
+		// nothing
+	default:
+		panic("unreachable")
+	}
+
+	return nil
 }
