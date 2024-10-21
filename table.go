@@ -680,9 +680,6 @@ func dbScan(tx *DBTX, tdef *TableDef, req *Scanner) error {
 		return fmt.Errorf("bad range")
 	}
 
-	if !slices.Equal(req.Key1.Cols, req.Key2.Cols) {
-		return fmt.Errorf("bad range key")
-	}
 	if err := checkTypes(tdef, req.Key1); err != nil {
 		return err
 	}
@@ -694,12 +691,13 @@ func dbScan(tx *DBTX, tdef *TableDef, req *Scanner) error {
 	req.tdef = tdef
 
 	// select index
-	isCovered := func(index []string) bool {
-		key := req.Key1.Cols
+	isCovered := func(key []string,index []string) bool {
 		return len(index) >= len(key) && slices.Equal(index[:len(key)], key)
 	}
 
-	req.index = slices.IndexFunc(tdef.Indexes, isCovered)
+	req.index = slices.IndexFunc(tdef.Indexes, func (index []string)bool  {
+		return isCovered(req.Key1.Cols, index) && isCovered(req.Key2.Cols, index)
+	})
 	if req.index < 0 {
 		return fmt.Errorf("no index")
 	}
