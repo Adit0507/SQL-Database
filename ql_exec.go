@@ -313,3 +313,17 @@ func qlScanInit(req *QLScan, sc *Scanner) (err error) {
 
 	return nil
 }
+
+type RecordIter interface {
+	Valid() bool
+	Next()
+	Deref(*Record) error
+}
+
+// evaluate expressions in SELECT
+type qlSelectIter struct {
+	iter  RecordIter //input
+	names []string
+	exprs []QLNODE
+}
+
